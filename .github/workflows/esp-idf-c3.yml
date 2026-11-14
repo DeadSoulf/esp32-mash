@@ -1,4 +1,4 @@
-name: Validate ESP32-C3 firmware
+name: Validate ESP32-C3 and S3 firmware
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.project }} / esp32c3
+    name: ${{ matrix.project }} / ${{ matrix.target }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
@@ -23,6 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         project: [gateway, node]
+        target: [esp32c3, esp32s3]
     steps:
       - uses: actions/checkout@v4
 
@@ -38,15 +39,16 @@ jobs:
           source /opt/esp/idf/export.sh
           cd "${{ matrix.project }}"
           grep -qx 'CONFIG_BLE_MESH_SETTINGS=y' sdkconfig.defaults
-          idf.py set-target esp32c3
+          idf.py set-target "${{ matrix.target }}"
           idf.py build
           grep -qx 'CONFIG_BLE_MESH_SETTINGS=y' sdkconfig
+          grep -qx 'CONFIG_IDF_TARGET="${{ matrix.target }}"' sdkconfig
           ls -l build/*.bin >/dev/null
 
       - name: Upload verified binaries
         uses: actions/upload-artifact@v4
         with:
-          name: automesh-${{ matrix.project }}-esp32c3
+          name: automesh-${{ matrix.project }}-${{ matrix.target }}
           retention-days: 14
           if-no-files-found: error
           path: |

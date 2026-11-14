@@ -52,7 +52,8 @@ class FirstBootAdminTests(unittest.TestCase):
                          "validAdminKey", "Сканировать Wi-Fi"):
             self.assertIn(expected, HTML)
         self.assertIn("automesh_admin.c", CMAKE)
-        self.assertIn(" mbedtls)", CMAKE)
+        self.assertIn(" mbedtls ", CMAKE)
+        self.assertIn("esp_driver_rmt)", CMAKE)
 
 
 if __name__ == "__main__":

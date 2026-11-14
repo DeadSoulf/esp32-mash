@@ -251,7 +251,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     if(!authorize(req))return ESP_OK;
     cJSON *doc=cJSON_CreateObject();
     if(!doc)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
-    cJSON_AddStringToObject(doc,"version","0.3.6-dev");
+    cJSON_AddStringToObject(doc,"version","0.3.7-dev");
 #if CONFIG_IDF_TARGET_ESP32C3
     cJSON_AddStringToObject(doc,"chip","ESP32-C3");
 #elif CONFIG_IDF_TARGET_ESP32S3

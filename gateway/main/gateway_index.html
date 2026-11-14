@@ -51,7 +51,7 @@ small{color:#9eb4c8}
 </head>
 <body>
 <main>
-<header><div><h1>ESP32 AutoMesh</h1><p class="sub">Встроенная панель Bluetooth Mesh шлюза</p></div><div id="connection" class="badge warn">Ожидаю ключ администратора</div></header>
+<header><div><h1>ESP32 AutoMesh</h1><p class="sub">Встроенная панель Bluetooth Mesh шлюза</p></div><div class="operations"><div id="connection" class="badge warn">Ожидаю ключ администратора</div><button type="button" id="logout" class="secondary" hidden>Выйти</button></div></header>
 <section class="panel" id="firstAdmin" hidden>
 <h2>Первый запуск — создание администратора</h2>
 <p class="sub">Шлюз пока не подключён к домашней сети. Его Wi-Fi AutoMesh доступен без пароля.
@@ -71,7 +71,7 @@ small{color:#9eb4c8}
 <p class="sub">Введите собственный ключ администратора. Для старого шлюза пока действует прежний ключ из USB-журнала, пока вы его не измените.</p>
 <form id="authform">
 <div class="formfield"><label for="secret">Ключ администратора</label><input id="secret" type="password" autocomplete="current-password" spellcheck="false" placeholder="Ключ администратора" minlength="6" maxlength="64" required></div>
-<button type="submit">Подключиться</button><button type="button" id="logout" class="secondary">Отключиться</button>
+<button type="submit">Подключиться</button>
 </form>
 <p id="message" class="msg" role="status"></p>
 </section>
@@ -109,6 +109,7 @@ small{color:#9eb4c8}
 </div>
 <section class="panel">
 <h2>Устройства</h2>
+<div class="wifi-search"><button id="scanMesh" type="button" class="secondary" disabled>Поиск новых устройств</button><span class="sub" id="meshScanStatus" role="status">Войдите в панель для поиска устройств.</span></div>
 <p class="sub">«Найти» запускает быстрое мигание выбранного узла на 15 секунд. Результат показывается после подтверждения устройства. Кнопка «Имя» сохраняет название, которое останется после перезагрузки.</p>
 <div style="overflow-x:auto"><table>
 <thead><tr><th>Устройство / UUID</th><th>Адрес Mesh</th><th>Состояние</th><th>Управление</th></tr></thead>
@@ -161,7 +162,9 @@ async function bootstrapAdmin(){
    if(!response.ok)throw Error('HTTP '+response.status);
    const cfg=await response.json();
    $('firstAdmin').hidden=!cfg.admin_required;
-   $('authPanel').hidden=!!cfg.admin_required;
+   $('authPanel').hidden=!!cfg.admin_required && !token;
+   $('logout').hidden=true;
+   $('scanMesh').disabled=true;
    if(cfg.admin_required) {
      token='';
      sessionStorage.removeItem('automesh_admin');
@@ -169,6 +172,7 @@ async function bootstrapAdmin(){
      $('wifiSetup').hidden=true;
      $('adminChange').hidden=true;
  $('gatewayOta').hidden=true;
+     $('meshScanStatus').textContent='Сначала создайте администратора.';
      $('connection').textContent='Нужно создать администратора';
      $('connection').className='badge warn';
    }
@@ -184,6 +188,10 @@ function invalidateAuth(reason){
  $('wifiSetup').hidden=true;
  $('adminChange').hidden=true;
  $('gatewayOta').hidden=true;
+ $('authPanel').hidden=false;
+ $('logout').hidden=true;
+ $('scanMesh').disabled=true;
+ $('meshScanStatus').textContent='Войдите в панель для поиска устройств.';
  $('devices').replaceChildren();
  $('connection').textContent='Требуется вход';
  $('connection').className='badge warn';
@@ -223,6 +231,12 @@ async function update(){
  const list=await api('/api/devices');
  if(!token)return;
  $('connection').textContent='Шлюз доступен';$('connection').className='badge good';
+ $('authPanel').hidden=true;
+ $('logout').hidden=false;
+ $('scanMesh').disabled=!!state.setup_mode;
+ if(!meshSearchBusy)$('meshScanStatus').textContent=state.setup_mode?
+   'Поиск Mesh доступен после подключения шлюза к роутеру.':
+   'BLE Mesh обнаруживает узлы автоматически. Нажмите для обновления списка.';
  $('adminChange').hidden=false;
  $('gatewayOta').hidden=!state.host_ota_ready;
  $('otaChip').textContent='Модель шлюза: '+(state.chip||'не определена')+
@@ -315,6 +329,29 @@ async function update(){
  }finally{updateBusy=false;}
 }
 
+let meshSearchBusy=false;
+$('scanMesh').addEventListener('click',async()=>{
+ if(meshSearchBusy || !token)return;
+ meshSearchBusy=true;
+ $('scanMesh').disabled=true;
+ const oldPending=Number($('waiting').textContent)||0;
+ $('meshScanStatus').textContent='Ищу новые BLE Mesh устройства... (10 секунд)';
+ try{
+   // BLE Mesh provisioner is already listening for unprovisioned advertisements.
+   // Refresh the gateway discovery cache; never approve any candidate automatically.
+   for(let i=0;i<10;i++){
+     if(!token)break;
+     await update();
+     if(i<9)await new Promise(done=>setTimeout(done,1000));
+   }
+   if(token){
+     const pending=Number($('waiting').textContent)||0;
+     $('meshScanStatus').textContent='Поиск завершён. Ожидают разрешения: '+pending+
+       (pending>oldPending?' (новых: '+(pending-oldPending)+')':'')+'.';
+   }
+ }catch(err){$('meshScanStatus').textContent='Ошибка поиска: '+err.message;}
+ finally{meshSearchBusy=false;if(token)$('scanMesh').disabled=false;}
+});
 let scanActive=false;
 let wifiChoiceOpen=false;
 function selectNetwork(name,secure,button){

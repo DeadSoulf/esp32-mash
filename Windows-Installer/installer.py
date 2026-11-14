@@ -21,6 +21,12 @@ from pathlib import Path
 import esptool
 from serial.tools import list_ports
 
+# Windows consoles and CI redirect may default to cp1252.  The installer
+# uses Russian messages, so make stdout/stderr encoding explicit.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 RELEASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 USER_ROOT = Path.home() / "AppData" / "Local" / "ESP32-AutoMesh"
 SUPPORTED_USB_VIDS = {0x303A, 0x10C4, 0x1A86, 0x0403}

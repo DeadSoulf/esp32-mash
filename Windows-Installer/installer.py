@@ -219,9 +219,24 @@ def main() -> int:
     parser.add_argument("--port", help="например COM13")
     parser.add_argument("--role", choices=["gateway", "node"], help="принудительный выбор роли")
     parser.add_argument("--check", action="store_true", help="только проверка оборудования и образов, без записи")
+    parser.add_argument("--self-test", action="store_true", help="проверить все встроенные образы без COM-портов")
     args = parser.parse_args()
 
-    line("ESP32 AutoMesh — установщик для Windows (v0.3.1-dev)")
+    line("ESP32 AutoMesh — установщик для Windows (v0.3.2-dev)")
+    if args.self_test:
+        manifest = read_manifest()
+        count = 0
+        for name, profile in manifest["profiles"].items():
+            for role in ("gateway", "node"):
+                if role not in profile.get("roles", {}):
+                    continue
+                files = role_assets(name, profile, role)
+                count += 1
+                line(f"  {profile['chip']} / {role}: {len(files)} образа, SHA-256 и тип чипа проверены")
+        if count < 4:
+            raise RuntimeError("Пакет неполный: отсутствуют образы шлюза/узла для C3 или S3")
+        line(f"Самопроверка выполнена: {count} совместимых комплектов")
+        return 0
     line("Поиск USB-устройств ESP32...")
     found = []
     for port in discover_ports() if args.port is None else [args.port]:

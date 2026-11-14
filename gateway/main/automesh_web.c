@@ -3,6 +3,8 @@
 #include "automesh_bridge.h"
 #include "automesh_admin.h"
 #include "automesh_ota.h"
+#include "automesh_gateway_node_ota.h"
+#include "automesh_ota_protocol.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
 #include <stdio.h>
@@ -269,7 +271,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(doc,"ip",ip_string);
     cJSON_AddStringToObject(doc,"mode",setup_mode?"setup_ap":"sta");
     cJSON_AddBoolToObject(doc,"setup_mode",setup_mode);
-    cJSON_AddBoolToObject(doc,"mesh_ota_ready",false);
+    cJSON_AddBoolToObject(doc,"mesh_ota_ready",!setup_mode);
     cJSON_AddBoolToObject(doc,"host_ota_ready",
         !setup_mode && esp_ota_get_next_update_partition(NULL)!=NULL);
     char *json=cJSON_PrintUnformatted(doc);
@@ -401,6 +403,121 @@ static esp_err_t host_ota_handler(httpd_req_t *req)
     return automesh_ota_upload(req);
 }
 
+/* Browser sends the file in 96-byte slices. The gateway never stores
+ * the complete node firmware or overwrites its own OTA fallback partition.
+ * Each BLE Mesh slice is acknowledged by the selected node.
+ */
+static esp_err_t node_ota_error(httpd_req_t *req, esp_err_t err)
+{
+    char body[100];
+    snprintf(body,sizeof(body),"{\"error\":\"%s\"}",esp_err_to_name(err));
+    const char *status=err==ESP_ERR_TIMEOUT ? "504 Gateway Timeout" :
+        err==ESP_ERR_INVALID_STATE ? "409 Conflict" :
+        err==ESP_ERR_NOT_SUPPORTED ? "412 Precondition Failed" :
+        "400 Bad Request";
+    return json_reply(req,status,body);
+}
+static bool parse_sha256(const char *hex, uint8_t digest[32])
+{
+    if (!hex || strlen(hex)!=64) return false;
+    for (int i=0;i<32;i++) {
+        char a=hex[i*2], b=hex[i*2+1];
+        int hi=(a>='0'&&a<='9')?a-'0':
+               (a>='a'&&a<='f')?a-'a'+10:
+               (a>='A'&&a<='F')?a-'A'+10:-1;
+        int lo=(b>='0'&&b<='9')?b-'0':
+               (b>='a'&&b<='f')?b-'a'+10:
+               (b>='A'&&b<='F')?b-'A'+10:-1;
+        if (hi<0 || lo<0)return false;
+        digest[i]=(uint8_t)((hi<<4)|lo);
+    }
+    return true;
+}
+static esp_err_t node_ota_start_handler(httpd_req_t *req)
+{
+    if(!authorize(req))return ESP_OK;
+    if(setup_mode || !valid_origin(req))
+        return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"Mesh OTA requires router Wi-Fi and same Origin");
+    cJSON *body=read_post_json(req);
+    if(!body)return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Invalid OTA JSON");
+    const cJSON *a=cJSON_GetObjectItemCaseSensitive(body,"address");
+    const cJSON *sz=cJSON_GetObjectItemCaseSensitive(body,"size");
+    const cJSON *chip=cJSON_GetObjectItemCaseSensitive(body,"chip");
+    const cJSON *sha=cJSON_GetObjectItemCaseSensitive(body,"sha256");
+    uint8_t digest[32]={0};
+    uint8_t target=0;
+    if(cJSON_IsString(chip) && chip->valuestring) {
+        if(strcmp(chip->valuestring,"C3")==0)target='C';
+        if(strcmp(chip->valuestring,"S3")==0)target='S';
+    }
+    const bool valid=cJSON_IsNumber(a) && a->valuedouble==(double)a->valueint &&
+      a->valueint>1 && a->valueint<0x8000 &&
+      cJSON_IsNumber(sz) && sz->valuedouble==(double)sz->valueint &&
+      sz->valueint>=512 && sz->valueint<=AUTOMESH_NODE_OTA_MAX_IMAGE &&
+      target && cJSON_IsString(sha) && sha->valuestring &&
+      parse_sha256(sha->valuestring,digest);
+    if(!valid){cJSON_Delete(body);return json_reply(req,"400 Bad Request",
+                 "{\"error\":\"invalid_image_metadata\"}");}
+    uint16_t session=0;
+    esp_err_t result=automesh_gateway_node_ota_start((uint16_t)a->valueint,
+                        target,(uint32_t)sz->valueint,digest,&session);
+    cJSON_Delete(body);
+    if(result!=ESP_OK)return node_ota_error(req,result);
+    char out[90];
+    snprintf(out,sizeof(out),"{\"accepted\":true,\"session\":%u,\"offset\":0}",session);
+    return json_reply(req,"200 OK",out);
+}
+static esp_err_t node_ota_chunk_handler(httpd_req_t *req)
+{
+    if(!authorize(req))return ESP_OK;
+    if(setup_mode || !valid_origin(req))
+        return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"OTA forbidden");
+    if(req->content_len==0 || req->content_len>AUTOMESH_NODE_OTA_BLOCK)
+        return json_reply(req,"400 Bad Request","{\"error\":\"chunk_too_large\"}");
+    char offset_text[20]={0};
+    if(httpd_req_get_hdr_value_str(req,"X-OTA-Offset",
+                                  offset_text,sizeof(offset_text))!=ESP_OK)
+        return json_reply(req,"400 Bad Request","{\"error\":\"missing_offset\"}");
+    char *end=NULL;
+    unsigned long offset=strtoul(offset_text,&end,10);
+    if(!end || end==offset_text || *end!='\0' ||
+       offset>AUTOMESH_NODE_OTA_MAX_IMAGE)
+        return json_reply(req,"400 Bad Request","{\"error\":\"invalid_offset\"}");
+    uint8_t chunk[AUTOMESH_NODE_OTA_BLOCK];
+    size_t got=0;
+    while(got<(size_t)req->content_len) {
+        int n=httpd_req_recv(req,(char *)chunk+got,req->content_len-got);
+        if(n<=0)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,
+                                            "Incomplete chunk");
+        got+=(size_t)n;
+    }
+    uint32_t next=0;
+    esp_err_t result=automesh_gateway_node_ota_chunk((uint32_t)offset,
+                                                       chunk,got,&next);
+    if(result!=ESP_OK)return node_ota_error(req,result);
+    char out[70];
+    snprintf(out,sizeof(out),"{\"accepted\":true,\"offset\":%lu}",(unsigned long)next);
+    return json_reply(req,"200 OK",out);
+}
+static esp_err_t node_ota_finish_handler(httpd_req_t *req)
+{
+    if(!authorize(req))return ESP_OK;
+    if(setup_mode || !valid_origin(req))
+        return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"OTA forbidden");
+    esp_err_t result=automesh_gateway_node_ota_finish();
+    return result==ESP_OK?json_reply(req,"200 OK","{\"completed\":true}"):
+                          node_ota_error(req,result);
+}
+static esp_err_t node_ota_abort_handler(httpd_req_t *req)
+{
+    if(!authorize(req))return ESP_OK;
+    if(setup_mode || !valid_origin(req))
+        return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"OTA forbidden");
+    esp_err_t result=automesh_gateway_node_ota_abort();
+    return result==ESP_OK?json_reply(req,"200 OK","{\"aborted\":true}"):
+                          node_ota_error(req,result);
+}
+
 static esp_err_t action_handler(httpd_req_t *req)
 {
     if(!authorize(req))return ESP_OK;
@@ -504,7 +621,7 @@ esp_err_t automesh_web_start(void)
     e=automesh_wifi_scan_init();
     if(e!=ESP_OK)return e;
     httpd_config_t hc=HTTPD_DEFAULT_CONFIG();
-    hc.max_uri_handlers=20;
+    hc.max_uri_handlers=24;
     hc.recv_wait_timeout=20;
     hc.send_wait_timeout=20;
     hc.stack_size=6144;
@@ -525,6 +642,10 @@ esp_err_t automesh_web_start(void)
     httpd_uri_t locate_status={.uri="/api/locate/status",.method=HTTP_GET,.handler=locate_status_handler};
     httpd_uri_t name={.uri="/api/name",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t host_ota={.uri="/api/ota/gateway",.method=HTTP_POST,.handler=host_ota_handler};
+    httpd_uri_t node_start={.uri="/api/ota/node/start",.method=HTTP_POST,.handler=node_ota_start_handler};
+    httpd_uri_t node_chunk={.uri="/api/ota/node/chunk",.method=HTTP_POST,.handler=node_ota_chunk_handler};
+    httpd_uri_t node_finish={.uri="/api/ota/node/finish",.method=HTTP_POST,.handler=node_ota_finish_handler};
+    httpd_uri_t node_abort={.uri="/api/ota/node/abort",.method=HTTP_POST,.handler=node_ota_abort_handler};
     httpd_uri_t wifi={.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_setup_handler};
     httpd_uri_t wifi_scan={.uri="/api/wifi/scan",.method=HTTP_POST,.handler=wifi_scan_begin_handler};
     httpd_uri_t wifi_list={.uri="/api/wifi/networks",.method=HTTP_GET,.handler=wifi_scan_status_handler};
@@ -541,6 +662,10 @@ esp_err_t automesh_web_start(void)
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&locate_status);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&name);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&host_ota);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_start);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_chunk);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_finish);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_abort);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi_scan);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi_list);

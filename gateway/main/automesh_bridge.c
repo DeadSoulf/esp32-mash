@@ -304,6 +304,29 @@ void automesh_note_version(uint16_t mesh_address, const uint8_t *data, size_t le
     if (found) automesh_led_mark_alive();
 }
 
+bool automesh_node_ota_supported(uint16_t address, uint8_t chip)
+{
+    if (!lock || (chip != 'C' && chip != 'S')) return false;
+    const int64_t now=esp_timer_get_time();
+    bool ok=false;
+    if (xSemaphoreTake(lock,pdMS_TO_TICKS(150))!=pdTRUE) return false;
+    for (int i=0; i<MAX_CANDIDATES; ++i) {
+        const candidate_t *c=&candidates[i];
+        if (!c->occupied || !c->approved || c->rejected ||
+            c->mesh_address!=address ||
+            !c->last_reply_us ||
+            now-c->last_reply_us>=35000000LL) continue;
+        // OTA1 is explicitly advertised by compatible node firmware.
+        const bool feature=strstr(c->fw_version," OTA1 ")!=NULL;
+        const bool target=(chip=='C') ? strstr(c->fw_version," C3 ")!=NULL :
+                                        strstr(c->fw_version," S3 ")!=NULL;
+        ok=feature && target;
+        break;
+    }
+    xSemaphoreGive(lock);
+    return ok;
+}
+
 void automesh_note_reply(uint16_t mesh_address)
 {
     bool found = false;

@@ -252,7 +252,7 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true", help="проверить все встроенные образы без COM-портов")
     args = parser.parse_args()
 
-    line("ESP32 AutoMesh — установщик для Windows (v0.3.10-dev)")
+    line("ESP32 AutoMesh — установщик для Windows (v0.3.11-dev)")
     if args.self_test:
         manifest = read_manifest()
         count = 0

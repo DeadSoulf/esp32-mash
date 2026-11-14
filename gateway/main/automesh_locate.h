@@ -11,3 +11,5 @@
  * STATUS: 1..31 ASCII bytes of actual running firmware identity. */
 #define AUTOMESH_FW_VERSION_GET ESP_BLE_MESH_MODEL_OP_3(0x34, AUTOMESH_VENDOR_CID)
 #define AUTOMESH_FW_VERSION_STATUS ESP_BLE_MESH_MODEL_OP_3(0x35, AUTOMESH_VENDOR_CID)
+/* Peer messages are forwarded by provisioned Mesh relays, not only the gateway. */
+#define AUTOMESH_PEER_BEACON_INTERVAL_SEC 60

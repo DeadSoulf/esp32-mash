@@ -31,6 +31,9 @@
 #include "ble_mesh_example_init.h"
 #include "automesh_status_led.h"
 #include "automesh_locate.h"
+#include "automesh_node_ota.h"
+#include "automesh_ota_protocol.h"
+#include "esp_timer.h"
 
 #define TAG "EXAMPLE"
 
@@ -86,6 +89,11 @@ static esp_ble_mesh_gen_onoff_srv_t onoff_server_2 = {
 static esp_ble_mesh_model_op_t locate_op[] = {
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_LOCATE_REQ, 3),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_FW_VERSION_GET, 0),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_START, 39),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_DATA, 7),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_FINISH, 2),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_ABORT, 2),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_PEER_HELLO, 2),
     ESP_BLE_MESH_MODEL_OP_END,
 };
 static esp_ble_mesh_model_t locate_models[] = {
@@ -123,6 +131,65 @@ static esp_ble_mesh_comp_t composition = {
  * requested. This does not authenticate physical device identity against an
  * active radio attacker; use only in trusted commissioning conditions.
  */
+#define MAX_MESH_PEERS 48
+typedef struct {
+    uint16_t address;
+    int64_t seen_us;
+} mesh_peer_t;
+static mesh_peer_t mesh_peers[MAX_MESH_PEERS];
+static portMUX_TYPE mesh_peers_guard=portMUX_INITIALIZER_UNLOCKED;
+
+static void automesh_note_peer(uint16_t address)
+{
+    if (!ESP_BLE_MESH_ADDR_IS_UNICAST(address) ||
+        address == esp_ble_mesh_get_primary_element_address()) return;
+    const int64_t now=esp_timer_get_time();
+    portENTER_CRITICAL(&mesh_peers_guard);
+    int slot=-1, oldest=0;
+    for (int i=0;i<MAX_MESH_PEERS;i++) {
+        if (mesh_peers[i].address==address) {slot=i;break;}
+        if (mesh_peers[i].address==0 && slot<0) slot=i;
+        if (mesh_peers[i].seen_us<mesh_peers[oldest].seen_us) oldest=i;
+    }
+    if (slot<0) slot=oldest;
+    mesh_peers[slot]=(mesh_peer_t){.address=address,.seen_us=now};
+    portEXIT_CRITICAL(&mesh_peers_guard);
+    // The status light reflects contact with ANY trusted Mesh peer,
+    // not only the gateway. Losing the gateway does not erase Mesh keys.
+    automesh_led_mark_alive();
+}
+static void automesh_peer_task(void *arg)
+{
+    (void)arg;
+    uint16_t seq=0;
+    while (true) {
+        if (esp_ble_mesh_node_is_provisioned() &&
+            esp_ble_mesh_get_primary_element_address()!=ESP_BLE_MESH_ADDR_UNASSIGNED) {
+            esp_ble_mesh_msg_ctx_t ctx={0};
+            ctx.net_idx=ESP_BLE_MESH_KEY_PRIMARY;
+            ctx.app_idx=0x0000; // Gateway binds this AppKey to the node's vendor model
+            ctx.addr=ESP_BLE_MESH_ADDR_ALL_NODES;
+            ctx.send_ttl=4;
+            uint8_t payload[2];
+            automesh_put16(payload,++seq);
+            esp_err_t err=esp_ble_mesh_server_model_send_msg(
+                &locate_models[0],&ctx,AUTOMESH_PEER_HELLO,sizeof(payload),payload);
+            if(err!=ESP_OK)
+                ESP_LOGD(TAG,"Peer hello skipped (model not yet bound): %s",esp_err_to_name(err));
+            int64_t now=esp_timer_get_time();
+            unsigned live=0;
+            portENTER_CRITICAL(&mesh_peers_guard);
+            for(int i=0;i<MAX_MESH_PEERS;i++)
+                if(mesh_peers[i].address &&
+                   now-mesh_peers[i].seen_us<180000000LL)live++;
+            portEXIT_CRITICAL(&mesh_peers_guard);
+            ESP_LOGI(TAG,"Mesh peer-to-peer: %u nearby peers (last 180s)",live);
+        }
+        // Low-rate AppKey-protected heartbeat; Mesh relay stays independent.
+        vTaskDelay(pdMS_TO_TICKS(60000u+(esp_random()%12000u)));
+    }
+}
+
 static esp_ble_mesh_prov_t provision = {
     .uuid = dev_uuid,
     .static_val = NULL,
@@ -318,6 +385,16 @@ static void automesh_locate_cb(esp_ble_mesh_model_cb_event_t event,
         !param->model_operation.ctx) return;
 
     const esp_ble_mesh_msg_ctx_t *ctx = param->model_operation.ctx;
+    if (param->model_operation.opcode == AUTOMESH_PEER_HELLO) {
+        if (param->model_operation.length == 2 &&
+            param->model_operation.msg && esp_ble_mesh_node_is_provisioned())
+            automesh_note_peer(ctx->addr);
+        return;
+    }
+    if (automesh_node_ota_command(&locate_models[0],ctx,
+                                 param->model_operation.opcode,
+                                 param->model_operation.msg,
+                                 param->model_operation.length)) return;
     // Only the approved gateway may query firmware or trigger locating.
     // The BLE Mesh stack checks the device's AppKey before dispatch.
     if (ctx->addr != 0x0001 ||
@@ -327,8 +404,14 @@ static void automesh_locate_cb(esp_ble_mesh_model_cb_event_t event,
         const esp_app_desc_t *app = esp_app_get_description();
         char version[32];
         // Hash prefix identifies this exact ELF build, not a Git commit SHA.
-        int count = snprintf(version, sizeof(version), "%.*s %02x%02x%02x%02x",
-                             20, app->version, app->app_elf_sha256[0],
+        int count = snprintf(version, sizeof(version), "%.*s %s OTA1 %02x%02x%02x%02x",
+                             12, app->version,
+#if CONFIG_IDF_TARGET_ESP32C3
+                             "C3",
+#else
+                             "S3",
+#endif
+                             app->app_elf_sha256[0],
                              app->app_elf_sha256[1], app->app_elf_sha256[2],
                              app->app_elf_sha256[3]);
         if (count <= 0 || count >= (int)sizeof(version)) return;
@@ -442,6 +525,8 @@ void app_main(void)
         return;
     }
     automesh_led_set_registered(esp_ble_mesh_node_is_provisioned());
+    configASSERT(xTaskCreate(automesh_peer_task,"mesh_peers",3072,
+                             NULL,3,NULL)==pdPASS);
     automesh_mark_boot_healthy();
 }
 

@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -17,6 +18,7 @@ void automesh_bridge_restore(const uint8_t uuid[16],uint16_t address);
 void automesh_provisioning_closed(void);
 void automesh_note_reply(uint16_t mesh_address);
 void automesh_note_version(uint16_t mesh_address, const uint8_t *data, size_t length);
+bool automesh_node_ota_supported(uint16_t address, uint8_t chip);
 esp_err_t automesh_approve_uuid(const char *uuid_hex);
 esp_err_t automesh_deny_uuid(const char *uuid_hex);
 int automesh_devices_json(char *out,size_t capacity);

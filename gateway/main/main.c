@@ -29,6 +29,8 @@
 #include "automesh_status_led.h"
 #include "automesh_web.h"
 #include "automesh_locate.h"
+#include "automesh_ota_protocol.h"
+#include "automesh_gateway_node_ota.h"
 
 #define TAG "EXAMPLE"
 
@@ -132,6 +134,7 @@ static esp_ble_mesh_client_t locate_client = {
 static esp_ble_mesh_model_op_t locate_client_op[] = {
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_LOCATE_STATUS,3),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_FW_VERSION_STATUS,1),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_STATUS,7),
     ESP_BLE_MESH_MODEL_OP_END,
 };
 static esp_ble_mesh_model_t locate_models[] = {
@@ -815,6 +818,14 @@ static void automesh_locate_client_cb(esp_ble_mesh_model_cb_event_t event,
 {
     if(event==ESP_BLE_MESH_MODEL_OPERATION_EVT &&
        param->model_operation.model==&locate_models[0] &&
+       param->model_operation.opcode==AUTOMESH_NODE_OTA_STATUS &&
+       param->model_operation.ctx && param->model_operation.msg) {
+        automesh_gateway_node_ota_on_status(param->model_operation.ctx->addr,
+                 param->model_operation.msg,param->model_operation.length);
+        return;
+    }
+    if(event==ESP_BLE_MESH_MODEL_OPERATION_EVT &&
+       param->model_operation.model==&locate_models[0] &&
        param->model_operation.opcode==AUTOMESH_FW_VERSION_STATUS &&
        param->model_operation.ctx && param->model_operation.msg &&
        param->model_operation.length > 0 &&
@@ -883,6 +894,8 @@ static esp_err_t ble_mesh_init(void)
         ESP_LOGE(TAG,"Locate vendor client init failed: %s",esp_err_to_name(err));
         return err;
     }
+    automesh_gateway_node_ota_init(locate_client.model,prov_key.net_idx,
+                                    prov_key.app_idx);
     err = esp_ble_mesh_provisioner_set_dev_uuid_match(match, sizeof(match), 0x0, false);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set matching device uuid (err %d)", err);

@@ -28,7 +28,7 @@ code{color:#c7e3ff;font-size:12px;word-break:break-all}
 button{border:0;border-radius:9px;padding:10px 13px;cursor:pointer;color:#fff;background:#159b79;font-weight:600;font:inherit}
 button.secondary{background:#334863}
 button:disabled{cursor:default;opacity:.4}
-input{background:#0f1928;color:#fff;border:1px solid #476079;border-radius:9px;padding:10px;width:100%;font:inherit}
+input,select{background:#0f1928;color:#fff;border:1px solid #476079;border-radius:9px;padding:10px;width:100%;font:inherit}
 label{font-size:13px;color:#b7cde0}
 form{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
 .formfield{flex:1;min-width:215px}
@@ -75,16 +75,7 @@ small{color:#9eb4c8}
 </form>
 <p id="message" class="msg" role="status"></p>
 </section>
-<section id="adminChange" class="panel" hidden>
-<h2>Сменить ключ администратора</h2>
-<form id="changeAdminForm">
-<div class="formfield"><label for="changeAdminKey">Новый ключ (не менее 6 символов)</label>
-<input id="changeAdminKey" type="password" autocomplete="new-password" minlength="6" maxlength="64" required></div>
-<div class="formfield"><label for="changeAdminConfirm">Повторите новый ключ</label>
-<input id="changeAdminConfirm" type="password" autocomplete="new-password" minlength="6" maxlength="64" required></div>
-<button type="submit">Сохранить новый ключ</button>
-</form>
-</section>
+
 <section id="wifiSetup" class="panel" hidden>
 <h2>Настройки Wi-Fi шлюза</h2>
 <p id="wifiModeNote" class="sub">Поиск доступных сетей, выбор роутера и смена Wi-Fi подключения. Во время поиска связь Bluetooth Mesh может ненадолго замедлиться.</p>
@@ -130,9 +121,17 @@ small{color:#9eb4c8}
 <p id="otaProgress" class="sub" role="status">Обновление не запускалось.</p>
 <p class="sub">После загрузки и проверки ESP32 перезагрузится. При неудачном запуске механизм загрузчика может откатить обновление. Сохраните резервную копию перед обновлением.</p>
 </section>
-<section class="panel">
-<h2>Обновление прошивки узлов по BLE Mesh</h2>
-<p class="sub">Отправка прошивок удалённым узлам через BLE Mesh пока не реализована. Не используйте функцию обновления шлюза для узлов: для них пока предусмотрена USB-прошивка.</p>
+<section class="panel" id="nodeOta" hidden>
+<h2>Обновление выбранного Mesh-узла</h2>
+<p class="sub">Выберите узел с поддержкой OTA1 и файл <code>onoff_server.bin</code> из Web-OTA/Nodes. Шлюз по BLE Mesh пересылает блоки с подтверждениями. Передача может быть длительной; не закрывайте вкладку до окончания. Другие узлы не обновляются.</p>
+<form id="nodeOtaForm">
+<div class="formfield"><label for="nodeOtaDevice">Устройство</label><select id="nodeOtaDevice" required><option value="">Выберите узел в сети</option></select></div>
+<div class="formfield"><label for="nodeOtaFirmware">Прошивка узла (.bin)</label><input type="file" id="nodeOtaFirmware" accept=".bin" required></div>
+<button id="nodeOtaButton" type="submit">Обновить узел</button><button id="nodeOtaCancel" class="secondary" type="button" hidden>Отмена передачи</button>
+</form>
+<progress id="nodeOtaProgressBar" value="0" max="100" style="width:100%;height:14px"></progress>
+<p class="sub" id="nodeOtaProgress" role="status">Обновление не запускалось.</p>
+<p class="sub">Для старого узла без OTA1 требуется одно начальное обновление по USB. Незавершённый OTA-образ не запускается, Mesh-ключи и NVS не удаляются.</p>
 </section>
 <section class="panel">
 <h2>Радиосвязь и индикация</h2>
@@ -140,6 +139,16 @@ small{color:#9eb4c8}
 <p class="sub">Wi-Fi шлюза: <strong id="ssid">—</strong>. Адрес страницы: <strong id="webAddress">192.168.4.1</strong>.</p>
 </section>
 <small>Локальная тестовая панель. Для удалённого доступа через интернет потребуется отдельный защищённый мост. Секреты регистрации и сети не отображаются в таблице.</small>
+<section id="adminChange" class="panel" hidden>
+<h2>Сменить ключ администратора</h2>
+<form id="changeAdminForm">
+<div class="formfield"><label for="changeAdminKey">Новый ключ (не менее 6 символов)</label>
+<input id="changeAdminKey" type="password" autocomplete="new-password" minlength="6" maxlength="64" required></div>
+<div class="formfield"><label for="changeAdminConfirm">Повторите новый ключ</label>
+<input id="changeAdminConfirm" type="password" autocomplete="new-password" minlength="6" maxlength="64" required></div>
+<button type="submit">Сохранить новый ключ</button>
+</form>
+</section>
 </main>
 <script>
 'use strict';
@@ -147,6 +156,8 @@ let token=sessionStorage.getItem('automesh_admin')||'';
 let authBlockedUntil=0;
 let updateBusy=false;
 let uploadingOta=false;
+let uploadingNodeOta=false;
+let nodeOtaCancelled=false;
 const $=id=>document.getElementById(id);
 $('secret').value=token;
 function message(s){$('message').textContent=s;$('firstAdminMessage').textContent=s;}
@@ -172,6 +183,7 @@ async function bootstrapAdmin(){
      $('wifiSetup').hidden=true;
      $('adminChange').hidden=true;
  $('gatewayOta').hidden=true;
+ $('nodeOta').hidden=true;
      $('meshScanStatus').textContent='Сначала создайте администратора.';
      $('connection').textContent='Нужно создать администратора';
      $('connection').className='badge warn';
@@ -188,6 +200,7 @@ function invalidateAuth(reason){
  $('wifiSetup').hidden=true;
  $('adminChange').hidden=true;
  $('gatewayOta').hidden=true;
+ $('nodeOta').hidden=true;
  $('authPanel').hidden=false;
  $('logout').hidden=true;
  $('scanMesh').disabled=true;
@@ -222,6 +235,7 @@ async function api(path,method='GET',body){
 }
 async function update(){
  if(!token || updateBusy || uploadingOta || Date.now()<authBlockedUntil)return;
+ if(uploadingNodeOta)return;
  updateBusy=true;
  try{
  // Validate the administrator key with a single request first.
@@ -241,6 +255,7 @@ async function update(){
    'BLE Mesh обнаруживает узлы автоматически. Нажмите для обновления списка.';
  $('adminChange').hidden=false;
  $('gatewayOta').hidden=!state.host_ota_ready;
+ $('nodeOta').hidden=!state.mesh_ota_ready;
  $('otaChip').textContent='Модель шлюза: '+(state.chip||'не определена')+
   '. Выберите файл шлюза для этой модели; контроллер также проверит заголовок прошивки.';
  $('ssid').textContent=state.ssid;
@@ -252,6 +267,19 @@ async function update(){
  if(!state.setup_mode && !$('routerSsid').value) $('routerSsid').value=state.ssid;
  $('connection').textContent=state.setup_mode?'Режим настройки Wi-Fi':'Шлюз доступен';
  const nodes=list.devices||[];
+ const chooser=$('nodeOtaDevice'), previousSelection=chooser.value;
+ chooser.replaceChildren(new Option('Выберите узел в сети',''));
+ for(const n of nodes) {
+   if(!n.address)continue;
+   const v=n.firmware_version||'Версия неизвестна';
+   const chip=v.includes(' C3 ')?'C3':v.includes(' S3 ')?'S3':'';
+   const item=new Option((n.name||n.uuid)+' · '+v,String(n.address));
+   item.disabled=!n.online || !chip || !v.includes(' OTA1 ');
+   item.dataset.chip=chip;
+   chooser.add(item);
+ }
+ if([...chooser.options].some(o=>o.value===previousSelection && !o.disabled))
+   chooser.value=previousSelection;
  $('found').textContent=nodes.length;
  $('live').textContent=nodes.filter(n=>n.online).length;
  $('waiting').textContent=nodes.filter(n=>n.state==='pending').length;
@@ -424,6 +452,136 @@ async function scanWifi(){
   }finally{scanActive=false;button.disabled=false;}
 }
 $('scanWifi').addEventListener('click',scanWifi);
+
+// Browser WebCrypto is often disabled on plain HTTP LAN addresses.
+// This compact synchronous fallback computes SHA-256 without external scripts.
+function sha256Portable(bytes){
+ const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+ 0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+ 0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+ 0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+ 0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+ 0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+ 0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+ 0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+ const h=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+ const padded=new Uint8Array((bytes.length+9+63)&~63);
+ padded.set(bytes);padded[bytes.length]=0x80;
+ const view=new DataView(padded.buffer);
+ view.setUint32(padded.length-8,0);
+ view.setUint32(padded.length-4,bytes.length*8);
+ const w=new Uint32Array(64);
+ const r=(x,n)=>(x>>>n)|(x<<(32-n));
+ for(let pos=0;pos<padded.length;pos+=64){
+   for(let j=0;j<16;j++)w[j]=view.getUint32(pos+j*4);
+   for(let j=16;j<64;j++){
+     const a=w[j-15],b=w[j-2];
+     const s0=r(a,7)^r(a,18)^(a>>>3),s1=r(b,17)^r(b,19)^(b>>>10);
+     w[j]=(w[j-16]+s0+w[j-7]+s1)>>>0;
+   }
+   let [a,b,c,d,e,f,g,hh]=h;
+   for(let j=0;j<64;j++){
+     const s1=r(e,6)^r(e,11)^r(e,25);
+     const t1=(hh+s1+((e&f)^(~e&g))+K[j]+w[j])>>>0;
+     const s0=r(a,2)^r(a,13)^r(a,22);
+     const t2=(s0+((a&b)^(a&c)^(b&c)))>>>0;
+     hh=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0;
+   }
+   for(let i=0;i<8;i++)h[i]=(h[i]+[a,b,c,d,e,f,g,hh][i])>>>0;
+ }
+ return h.map(v=>v.toString(16).padStart(8,'0')).join('');
+}
+async function sha256Hex(bytes){
+ if(globalThis.crypto && globalThis.crypto.subtle){
+   try {
+     const hash=await globalThis.crypto.subtle.digest('SHA-256',bytes);
+     return [...new Uint8Array(hash)].map(v=>v.toString(16).padStart(2,'0')).join('');
+   }catch(_){}
+ }
+ return sha256Portable(bytes);
+}
+$('nodeOtaCancel').addEventListener('click',()=>{
+ nodeOtaCancelled=true;
+ $('nodeOtaCancel').disabled=true;
+ $('nodeOtaProgress').textContent='Остановка после текущего блока...';
+});
+$('nodeOtaForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ if(uploadingNodeOta||!token)return;
+ const opt=$('nodeOtaDevice').selectedOptions[0],file=$('nodeOtaFirmware').files[0];
+ if(!opt||opt.disabled||!opt.value||!file)return;
+ const address=Number(opt.value),chip=opt.dataset.chip;
+ if(!['C3','S3'].includes(chip) ||
+    !Number.isInteger(address)||address<2||address>=32768){
+   $('nodeOtaProgress').textContent='Не удалось определить совместимый узел.';return;
+ }
+ if(!/onoff_server.*\.bin$/i.test(file.name) ||
+    file.size<512||file.size>0x1c0000) {
+   $('nodeOtaProgress').textContent='Нужен бинарный файл узла onoff_server.bin (не более 1,75 МБ).';return;
+ }
+ if((chip==='C3'&&/esp32s3|s3-zero/i.test(file.name)) ||
+    (chip==='S3'&&/esp32c3/i.test(file.name))){
+   $('nodeOtaProgress').textContent='Файл прошивки предназначен для другого чипа.';return;
+ }
+ if(!confirm('Обновить ТОЛЬКО выбранный Mesh-узел '+opt.textContent+
+             '? Длительная передача; после проверки узел перезагрузится.'))return;
+ uploadingNodeOta=true;nodeOtaCancelled=false;
+ $('nodeOtaButton').disabled=true;
+ $('nodeOtaCancel').hidden=false;$('nodeOtaCancel').disabled=false;
+ const progress=$('nodeOtaProgress'),bar=$('nodeOtaProgressBar');bar.value=0;
+ let started=false;
+ try {
+   progress.textContent='Читаю файл и вычисляю SHA-256...';
+   const bytes=new Uint8Array(await file.arrayBuffer());
+   const digest=await sha256Hex(bytes);
+   if(nodeOtaCancelled)throw Error('Отменено');
+   progress.textContent='Ожидаю подтверждения узла для начала OTA...';
+   await api('/api/ota/node/start','POST',{address,chip,size:bytes.length,sha256:digest});
+   started=true;
+   for(let offset=0;offset<bytes.length;offset+=96){
+     if(nodeOtaCancelled)throw Error('Остановлено пользователем');
+     const block=bytes.subarray(offset,Math.min(bytes.length,offset+96));
+     let ok=false,reason='';
+     for(let attempt=0;attempt<3&&!ok;attempt++){
+       try {
+         const response=await fetch('/api/ota/node/chunk',{
+           method:'POST',cache:'no-store',
+           headers:{'X-Automesh-Admin':token,'X-OTA-Offset':String(offset),
+                    'Content-Type':'application/octet-stream'},
+           body:block
+         });
+         if(response.status===401||response.status===429){
+           invalidateAuth('Авторизация завершилась во время OTA');throw Error('Авторизация шлюза завершилась');
+         }
+         if(!response.ok)throw Error('HTTP '+response.status);
+         const ack=await response.json();
+         if(ack.offset!==offset+block.length)throw Error('Несовпадение смещения Mesh ACK');
+         ok=true;
+       }catch(err){reason=err.message;}
+     }
+     if(!ok)throw Error('Ошибка передачи блока '+offset+': '+reason);
+     if(offset%1536===0||offset+block.length===bytes.length){
+       const pct=Math.floor((offset+block.length)*100/bytes.length);
+       bar.value=pct;
+       progress.textContent='Узел '+address+': '+pct+'% ('+
+         (offset+block.length)+' / '+bytes.length+' байт). Не закрывайте страницу.';
+     }
+   }
+   progress.textContent='Узел получил файл. Проверяю SHA-256 и приложение...';
+   await api('/api/ota/node/finish','POST',{});
+   started=false;bar.value=100;
+   progress.textContent='Готово: узел подтвердил OTA, выполняет перезапуск. Проверьте версию после связи с Mesh.';
+ }catch(err){
+   progress.textContent='Обновление не завершено: '+err.message+
+     '. Текущая прошивка узла остаётся активной до успешной проверки.';
+   if(started)try{await api('/api/ota/node/abort','POST',{});}catch(_){}
+ }finally{
+   uploadingNodeOta=false;
+   $('nodeOtaButton').disabled=false;
+   $('nodeOtaCancel').hidden=true;
+   update();
+ }
+});
 
 $('gatewayOtaForm').addEventListener('submit',async e=>{
  e.preventDefault();

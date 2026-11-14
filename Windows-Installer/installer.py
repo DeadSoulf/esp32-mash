@@ -219,9 +219,7 @@ def choose_role(previous: str | None, requested: str | None) -> str:
         role={"1":"gateway","2":"node"}.get(selected)
         if role:
             if previous and previous!=role:
-                line("ПРЕДУПРЕЖДЕНИЕ: ранее была установлена другая роль.")
-                if input("Сменить роль? Введите СМЕНИТЬ: ").strip().upper()!="СМЕНИТЬ":
-                    continue
+                line("ВНИМАНИЕ: выбор отличается от ранее установленной роли.")
             return role
         line("Нужен явный выбор 1 или 2.")
 
@@ -248,12 +246,13 @@ def flash_device(device: dict, profile: dict, files: dict[str, Path], reset_nvs=
 def main() -> int:
     parser = argparse.ArgumentParser(description="AutoMesh: первичная установка прошивки ESP32")
     parser.add_argument("--port", help="например COM13")
-    parser.add_argument("--role", choices=["gateway", "node"], help="принудительный выбор роли")
+    parser.add_argument("--role", choices=["gateway", "node"], help="выбрать шлюз/узел без дополнительного вопроса")
+    parser.add_argument("--erase-nvs", action="store_true", help="ОПАСНО: очистить NVS и ключи (только по явному запросу)")
     parser.add_argument("--check", action="store_true", help="только проверка оборудования и образов, без записи")
     parser.add_argument("--self-test", action="store_true", help="проверить все встроенные образы без COM-портов")
     args = parser.parse_args()
 
-    line("ESP32 AutoMesh — установщик для Windows (v0.3.8-dev)")
+    line("ESP32 AutoMesh — установщик для Windows (v0.3.9-dev)")
     if args.self_test:
         manifest = read_manifest()
         count = 0
@@ -302,34 +301,36 @@ def main() -> int:
         line("Режим проверки: никакие изменения в Flash не выполнены.")
         return 0
 
-    answer = input("Подтвердите профиль платы (ДА/YES): ").strip().upper()
-    if answer not in ("ДА", "YES", "Y"):
-        line("Операция отменена: не подтверждён профиль платы.")
-        return 4
-    # Read before write, even if user previously flashed other firmware.
-    backup = backup_flash(selected)
-    role = choose_role(existing_role(backup), args.role)
+    # Select a role first. Validate the exact images before a slow full Flash backup.
+    role = choose_role(None, args.role)
     files = role_assets(profile_name, profile, role)
-    line(f"\nПлата: {selected['chip']} на {selected['port']}")
-    line(f"Роль: {HEX_ROLE[role]}")
-    line(f"Исходная Flash сохранена: {backup}")
-    line("Начальная установка затронет загрузчик, таблицу разделов, OTA и приложение.")
-    line("NVS с прежними сетевыми и Mesh-ключами пока НЕ очищается.")
-    reset_nvs = input("Очистить NVS после резервного копирования? (нет/да): ").strip().lower() == "да"
-    line("Команда перезапишет содержимое платы. Это нельзя отменить без восстановления backup.")
-    line(f"Выбрано: {selected['port']} / {selected['mac']} / {HEX_ROLE[role]}")
-    if input(f"Для подтверждения наберите COM-порт {selected['port']}: ").strip().upper() != selected['port'].upper():
-        line("Контроллер не подтверждён; отмена.")
-        return 5
-    if input("Для записи введите ПРОШИТЬ (или FLASH): ").strip().upper() not in ("ПРОШИТЬ", "FLASH"):
-        line("Отменено, резервная копия осталась на диске.")
+
+    # Always back up the entire Flash before flashing. No extra prompt needed.
+    backup = backup_flash(selected)
+    previous = existing_role(backup)
+
+    line("\nИТОГО: готово к записи")
+    line(f"  Контроллер: {selected['port']} / {selected['chip']} / MAC {selected['mac']}")
+    line(f"  Профиль платы: {profile['board_profile']}")
+    line(f"  Прошивка: {HEX_ROLE[role]}")
+    line(f"  Резервная копия: {backup}")
+    if previous and previous != role:
+        line(f"  ВНИМАНИЕ: прежняя роль {HEX_ROLE[previous]}, будет заменена на {HEX_ROLE[role]}.")
+    if args.erase_nvs:
+        line("  ВНИМАНИЕ: NVS будет ОЧИЩЕНО — Wi-Fi, Mesh-ключи и данные администратора будут потеряны!")
+    else:
+        line("  NVS НЕ очищается, сохранённые Wi-Fi и Mesh-ключи останутся.")
+    line("  Будут переписаны загрузчик, разделы, OTA-метаданные и приложение.")
+    # One single confirmation for the entire operation, after device/role/backup checks.
+    if input("Начать прошивку? [1] ДА / [0] Отмена: ").strip() != "1":
+        line("Отменено. Резервная копия сохранена, Flash не изменена.")
         return 5
     current=identify(selected["port"])
     if current is None or any(current[k]!=selected[k] for k in ("chip","flash","mac","port")):
         raise RuntimeError("Контроллер изменился после резервного копирования. Запись запрещена.")
-    flash_device(selected, profile, files, reset_nvs=reset_nvs)
+    flash_device(selected, profile, files, reset_nvs=args.erase_nvs)
     line("\nПосле загрузки: шлюз создаёт Wi-Fi для настройки или подключается к роутеру.")
-    line("Узел появляется в Mesh только после разрешения в веб-панели и ввода OOB.")
+    line("Узел появляется в Mesh только после ручного разрешения в веб-панели шлюза.")
     return 0
 
 

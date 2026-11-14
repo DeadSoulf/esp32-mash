@@ -15,7 +15,7 @@ from pathlib import Path
 
 CHIPS = [
     ("esp32c3", "ESP32-C3", "ESP32-C3 SuperMini 4MB; GPIO8 active-low status LED", "GPIO8 (active-low)"),
-    ("esp32s3", "ESP32-S3", "ESP32-S3 generic 4MB; USB Serial/JTAG", "No GPIO LED configured (board-specific)"),
+    ("esp32s3", "ESP32-S3", "Waveshare ESP32-S3-Zero 4MB; WS2812 on GPIO21", "WS2812 RGB on GPIO21 (Waveshare S3-Zero)"),
 ]
 ROLES = (("gateway", "provisioner.bin"), ("node", "onoff_server.bin"))
 IMAGES = {
@@ -29,7 +29,7 @@ MAX_APP_BYTES = 0x1C0000
 def stage(artifacts: Path, target: Path) -> dict:
     manifest = {"schema": 2, "version": "0.3.7-dev", "profiles": {}}
     for chip, full_chip, description, led_profile in CHIPS:
-        key = f"{chip}-generic-4mb" if chip == "esp32s3" else f"{chip}-supermini-4mb"
+        key = f"{chip}-zero-4mb" if chip == "esp32s3" else f"{chip}-supermini-4mb"
         profile = {
             "chip": full_chip,
             "esptool_chip": chip,

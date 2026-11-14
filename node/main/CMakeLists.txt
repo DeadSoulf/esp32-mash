@@ -3,5 +3,5 @@ set(srcs "main.c"
 
 idf_component_register(SRCS "automesh_status_led.c" "${srcs}"
                     INCLUDE_DIRS  "."
-                    REQUIRES esp_driver_gpio esp_driver_rmt)
+                    REQUIRES nvs_flash app_update esp_hw_support bt esp_timer esp_driver_gpio esp_driver_rmt)
 

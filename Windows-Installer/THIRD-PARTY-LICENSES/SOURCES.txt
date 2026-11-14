@@ -1,0 +1,5 @@
+Installer embeds esptool 5.6.0 (GPL-2.0-or-later).
+Upstream source: https://github.com/espressif/esptool/tree/v5.6.0
+Source installation: pip install esptool==5.6.0
+Firmware is built with Espressif ESP-IDF v5.5.3; see https://github.com/espressif/esp-idf.
+

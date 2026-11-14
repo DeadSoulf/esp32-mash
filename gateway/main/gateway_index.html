@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 AutoMesh — шлюз</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0c1421;color:#e9f2fd}
+*{box-sizing:border-box}
+body{margin:0;padding:22px}
+main{max-width:1060px;margin:auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:26px}
+h1{font-size:29px;letter-spacing:-.8px;margin:0}
+h2{font-size:19px;margin:0 0 12px}
+.sub{color:#92a8be;font-size:14px;margin:5px 0}
+.panel{background:#152336;border:1px solid #304359;border-radius:15px;padding:20px;margin:16px 0}
+.overview{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.metric{border:1px solid #2e4157;background:#19293e;border-radius:12px;padding:17px}
+.metric strong{font-size:31px;display:block;margin-top:7px}
+.badge{display:inline-flex;background:#364354;border-radius:40px;padding:7px 11px;font-size:12px;color:#dcecff;align-items:center}
+.good{background:#144837;color:#b5ffe1}
+.warn{background:#59451c;color:#ffe5ad}
+.offline{background:#513138;color:#ffcdcb}
+table{width:100%;border-collapse:collapse;text-align:left;min-width:680px}
+th,td{padding:12px 9px;border-bottom:1px solid #28394d}
+th{color:#8eacc5;font-size:12px;letter-spacing:.15px;font-weight:600}
+code{color:#c7e3ff;font-size:12px;word-break:break-all}
+button{border:0;border-radius:9px;padding:10px 13px;cursor:pointer;color:#fff;background:#159b79;font-weight:600;font:inherit}
+button.secondary{background:#334863}
+button:disabled{cursor:default;opacity:.4}
+input{background:#0f1928;color:#fff;border:1px solid #476079;border-radius:9px;padding:10px;width:100%;font:inherit}
+label{font-size:13px;color:#b7cde0}
+form{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+.formfield{flex:1;min-width:215px}
+.msg{min-height:20px;color:#f8c979;font-size:13px}
+small{color:#9eb4c8}
+.operations{display:flex;gap:7px;flex-wrap:wrap}
+
+.wifi-search{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:15px 0}
+.wifi-results{display:grid;gap:7px;margin:12px 0 19px}
+.wifi-network{display:flex;gap:12px;width:100%;align-items:center;justify-content:space-between;text-align:left;background:#20354b;border:1px solid #3a5068;border-radius:10px;color:#eaf2fb;padding:12px 14px}
+.wifi-network:hover,.wifi-network:focus-visible{background:#2b4d66;border-color:#5e9fc1}
+.wifi-network.chosen{border:2px solid #23c197;background:#173e3d}
+.wifi-network .net-info{display:flex;flex-direction:column;gap:4px;min-width:0}
+.wifi-network .net-title{font-weight:650;overflow-wrap:anywhere}
+.wifi-network .net-extra{font-size:12px;color:#b1c3d5}
+.wifi-network .signal{font-size:13px;flex-shrink:0;color:#bce8d9}
+
+@media(max-width:680px){header{align-items:flex-start;flex-direction:column}.overview{grid-template-columns:1fr}body{padding:14px}h1{font-size:24px}}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>ESP32 AutoMesh</h1><p class="sub">Встроенная панель Bluetooth Mesh шлюза</p></div><div id="connection" class="badge warn">Ожидаю ключ администратора</div></header>
+<section class="panel">
+<h2>Доступ к панели</h2>
+<p class="sub">Ключ администратора напечатан шлюзом в USB-журнале при запуске. Wi-Fi пароль не является ключом администратора.</p>
+<form id="authform">
+<div class="formfield"><label for="secret">Ключ администратора</label><input id="secret" type="password" autocomplete="off" spellcheck="false" placeholder="32 символа" minlength="32" maxlength="32" required></div>
+<button type="submit">Подключиться</button><button type="button" id="logout" class="secondary">Отключиться</button>
+</form>
+<p id="message" class="msg" role="status"></p>
+</section>
+<section id="wifiSetup" class="panel" hidden>
+<h2>Настройки Wi-Fi шлюза</h2>
+<p id="wifiModeNote" class="sub">Поиск доступных сетей, выбор роутера и смена Wi-Fi подключения. Во время поиска связь Bluetooth Mesh может ненадолго замедлиться.</p>
+<div class="wifi-search">
+<button type="button" id="scanWifi" class="secondary">Сканировать Wi-Fi</button>
+<span class="sub" id="wifiScanStatus" role="status">Выберите поиск, чтобы увидеть сети рядом со шлюзом.</span>
+</div>
+<div id="wifiResults" class="wifi-results" aria-live="polite"></div>
+<form id="wifiForm">
+<div class="formfield"><label for="routerSsid">Название Wi-Fi сети (2,4 ГГц)</label>
+<input id="routerSsid" autocomplete="off" maxlength="32" required placeholder="SSID домашнего роутера"></div>
+<div class="formfield"><label for="routerPass">Пароль Wi-Fi сети</label>
+<input id="routerPass" type="password" autocomplete="off" minlength="8" maxlength="63" required></div>
+<button type="submit">Подключить шлюз к сети</button>
+</form>
+<p class="sub">После выбора другой Wi-Fi сети шлюз перезагрузится. Если подключение не удастся, прежние настройки автоматически восстановятся примерно через 45 секунд. Новый IP-адрес появится в USB-журнале.</p>
+</section>
+<div class="overview">
+<div class="metric"><span class="sub">Обнаружено</span><strong id="found">—</strong></div>
+<div class="metric"><span class="sub">В сети</span><strong id="live">—</strong></div>
+<div class="metric"><span class="sub">Ожидают допуска</span><strong id="waiting">—</strong></div>
+</div>
+<section class="panel">
+<h2>Устройства</h2>
+<p class="sub">Нажмите «Найти» напротив зарегистрированного узла — только его светодиод начнёт быстро мигать на 15 секунд.</p>
+<div style="overflow-x:auto"><table>
+<thead><tr><th>Устройство / UUID</th><th>Адрес Mesh</th><th>Состояние</th><th>Управление</th></tr></thead>
+<tbody id="devices"><tr><td colspan="4" class="sub">Введите ключ администратора</td></tr></tbody>
+</table></div>
+</section>
+<section class="panel">
+<h2>Обновление прошивок OTA</h2>
+<p class="sub">Загрузка прошивок выбранному устройству по цепочке Bluetooth Mesh будет добавлена после проверки регистрации и контрольных сообщений. Разделы OTA уже предусмотрены.</p>
+<button disabled>Обновить выбранную ESP32</button>
+</section>
+<section class="panel">
+<h2>Радиосвязь и индикация</h2>
+<p class="sub">Узлы получают контрольный запрос от шлюза. При ответе светодиод горит; если ответа нет 35 секунд — мигает. Шлюз работает по Wi-Fi для веб-панели, а ESP32 общаются друг с другом через BLE Mesh.</p>
+<p class="sub">Wi-Fi шлюза: <strong id="ssid">—</strong>. Адрес страницы: <strong id="webAddress">192.168.4.1</strong>.</p>
+</section>
+<small>Локальная тестовая панель. Для удалённого доступа через интернет потребуется отдельный защищённый мост. Секреты регистрации и сети не отображаются в таблице.</small>
+</main>
+<script>
+'use strict';
+let token=sessionStorage.getItem('automesh_admin')||'';
+const $=id=>document.getElementById(id);
+$('secret').value=token;
+function message(s){$('message').textContent=s;}
+function uiState(s){return ({online:'В сети',offline:'Нет связи',pending:'Ожидает подтверждения',denied:'Отклонено',provisioning:'Регистрация...'})[s]||'Неизвестно';}
+function badgeStyle(s){return s==='online'?'good':s==='offline'?'offline':s==='pending'?'warn':'';}
+async function api(path,method='GET',body){
+ const resp=await fetch(path,{method,cache:'no-store',
+   headers:{'X-Automesh-Admin':token,'Content-Type':'application/json'},
+   body:body?JSON.stringify(body):undefined});
+ if(!resp.ok){let detail='HTTP '+resp.status;try{detail=(await resp.json()).error||detail;}catch(e){}throw Error(detail);}
+ return resp.json();
+}
+async function update(){
+ if(!token)return;
+ try{
+ const [state, list]=await Promise.all([api('/api/status'),api('/api/devices')]);
+ $('connection').textContent='Шлюз доступен';$('connection').className='badge good';
+ $('ssid').textContent=state.ssid;
+ $('webAddress').textContent=state.ip;
+ $('wifiSetup').hidden=false;
+ $('wifiModeNote').textContent=state.setup_mode?
+  'Первоначальная настройка. Поиск Wi-Fi работает без Bluetooth Mesh; выберите роутер, чтобы запустить сеть.':
+  'Шлюз подключён к '+state.ssid+'. Здесь можно сканировать сети и сменить Wi-Fi, сохранив автоматическое восстановление при ошибке.';
+ if(!state.setup_mode && !$('routerSsid').value) $('routerSsid').value=state.ssid;
+ $('connection').textContent=state.setup_mode?'Режим настройки Wi-Fi':'Шлюз доступен';
+ const nodes=list.devices||[];
+ $('found').textContent=nodes.length;
+ $('live').textContent=nodes.filter(n=>n.online).length;
+ $('waiting').textContent=nodes.filter(n=>n.state==='pending').length;
+ $('devices').replaceChildren();
+ if(!nodes.length){const row=$('devices').insertRow();const cell=row.insertCell();cell.colSpan=4;cell.textContent='Пока не обнаружено устройств';cell.className='sub';}
+ for(const node of nodes){
+   const row=$('devices').insertRow();
+   const name=row.insertCell();const id=document.createElement('code');id.textContent=node.uuid;name.append(id);
+   const mesh=row.insertCell();mesh.textContent=node.address?'0x'+Number(node.address).toString(16).padStart(4,'0'):'—';
+   const status=row.insertCell();const badge=document.createElement('span');badge.className='badge '+badgeStyle(node.state);badge.textContent=uiState(node.state);status.append(badge);
+   const actions=row.insertCell();const holder=document.createElement('div');holder.className='operations';actions.append(holder);
+   function action(text,secondary,fn){const btn=document.createElement('button');btn.textContent=text;if(secondary)btn.className='secondary';btn.addEventListener('click',fn);holder.append(btn);}
+   if(node.state==='pending'){
+     action('Разрешить',false,async()=>{
+       const oob=prompt('OOB-ключ этой ESP32 (32 шестнадцатеричных символа):');
+       if(oob===null)return;
+       if(!/^[0-9a-fA-F]{32}$/.test(oob)){message('Неправильный OOB-ключ');return;}
+       try{await api('/api/approve','POST',{uuid:node.uuid,oob:oob.toLowerCase()});message('Регистрация запрошена для '+node.uuid);await update();}
+       catch(e){message('Ошибка регистрации: '+e.message);}
+     });
+     action('Отклонить',true,async()=>{if(!confirm('Отклонить эту ESP32?'))return;try{await api('/api/deny','POST',{uuid:node.uuid});await update();}catch(e){message(e.message);}});
+   }else if(node.address){
+     action('Найти',false,async()=>{
+       try{
+         await api('/api/locate','POST',{address:node.address,seconds:15});
+         message('Команда отправлена на '+node.uuid+'. Светодиод должен быстро мигать 15 секунд. Если узел недоступен, команда не сработает.');
+       }catch(e){message('Не удалось отправить поиск: '+e.message);}
+     });
+     action('Проверить связь',true,async()=>{try{await api('/api/ping','POST',{address:node.address});message('Запрос проверки отправлен. Дождитесь обновления статуса.');}catch(e){message(e.message);}});
+   }
+ }
+ }catch(e){$('connection').textContent='Панель не авторизована';$('connection').className='badge warn';message('Ошибка: '+e.message);}
+}
+
+let scanActive=false;
+let wifiChoiceOpen=false;
+function selectNetwork(name,secure,button){
+  $('routerSsid').value=name;
+  wifiChoiceOpen=!secure;
+  const input=$('routerPass');
+  input.required=secure;
+  input.minLength=secure?8:0;
+  if(!secure)input.value='';
+  input.placeholder=secure?'Пароль этой сети':'Без пароля (открытая сеть)';
+  document.querySelectorAll('.wifi-network').forEach(b=>b.classList.remove('chosen'));
+  if(button)button.classList.add('chosen');
+  $('routerPass').focus();
+  message(secure?'Выбрана сеть '+name+'. Введите её пароль.':
+    'Выбрана открытая сеть '+name+'. У неё нет защиты Wi-Fi.');
+}
+function displayWifiResults(data){
+  const target=$('wifiResults');
+  target.replaceChildren();
+  const networks=Array.isArray(data.networks)?data.networks:[];
+  const seen=new Set();
+  let shown=0;
+  for(const net of networks){
+    if(typeof net.ssid!=='string'||!net.ssid||seen.has(net.ssid))continue;
+    seen.add(net.ssid);
+    shown++;
+    const name=net.ssid;
+    const secure=!!net.secure;
+    const rssi=Number(net.rssi);
+    const pct=Math.min(100,Math.max(0,Math.round(2*(rssi+100))));
+    const button=document.createElement('button');
+    button.type='button';button.className='wifi-network';
+    const info=document.createElement('span');info.className='net-info';
+    const title=document.createElement('span');title.className='net-title';title.textContent=name;
+    const desc=document.createElement('span');desc.className='net-extra';
+    desc.textContent=(secure?'🔒 Защищена':'Открытая сеть')+' · Канал '+String(net.channel??'?');
+    const signal=document.createElement('span');signal.className='signal';
+    signal.textContent=pct+'% ('+rssi+' dBm)';
+    info.append(title,desc);button.append(info,signal);
+    button.addEventListener('click',()=>selectNetwork(name,secure,button));
+    target.append(button);
+  }
+  $('wifiScanStatus').textContent=shown?
+    'Найдено сетей: '+shown+'. Нажмите на нужную сеть.':
+    'Сети не найдены. Попробуйте повторить сканирование.';
+}
+async function scanWifi(){
+  if(scanActive)return;
+  scanActive=true;
+  const button=$('scanWifi');button.disabled=true;
+  $('wifiScanStatus').textContent='Поиск сетей (может ненадолго прерваться соединение с точкой доступа)...';
+  try{
+    await api('/api/wifi/scan','POST');
+    for(let i=0;i<22;i++){
+      await new Promise(resolve=>setTimeout(resolve,850));
+      const data=await api('/api/wifi/networks');
+      if(data.scanning)continue;
+      if(data.error)throw Error(data.error);
+      if(data.finished){displayWifiResults(data);return;}
+    }
+    $('wifiScanStatus').textContent='Поиск продолжается. Нажмите «Сканировать Wi-Fi» ещё раз через несколько секунд.';
+  }catch(err){
+    $('wifiScanStatus').textContent='Ошибка поиска Wi-Fi: '+err.message;
+  }finally{scanActive=false;button.disabled=false;}
+}
+$('scanWifi').addEventListener('click',scanWifi);
+
+$('wifiForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const ssid=$('routerSsid').value;
+  const password=$('routerPass').value;
+  if(new TextEncoder().encode(ssid).length>32 || !ssid.trim() ||
+    (password.length!==0 && password.length<8) || password.length>63){
+    message('Проверь SSID и пароль (до 32 байт; для защищённой сети 8–63 символа)');return;
+  }
+  try{
+    await api('/api/wifi','POST',{ssid,password});
+    $('routerPass').value='';
+    message('Настройки проверяются. Шлюз перезагружается; при неудачном подключении вернётся к прежней Wi-Fi сети. Новый IP смотри в USB-журнале.');
+  }catch(err){message('Ошибка настройки Wi-Fi: '+err.message);}
+});
+$('authform').addEventListener('submit',e=>{e.preventDefault();let v=$('secret').value.trim();if(!/^[0-9a-fA-F]{32}$/.test(v)){message('Нужно 32 шестнадцатеричных символа');return;}token=v.toLowerCase();sessionStorage.setItem('automesh_admin',token);message('Проверяю ключ');update();});
+$('logout').addEventListener('click',()=>{token='';sessionStorage.removeItem('automesh_admin');$('secret').value='';$('devices').replaceChildren();$('connection').textContent='Не авторизован';$('connection').className='badge warn';});
+update();setInterval(update,3000);
+</script>
+</body>
+</html>
+

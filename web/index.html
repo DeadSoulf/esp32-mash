@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 AutoMesh</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+body{background:#0d1420;color:#e7eef7;margin:0;padding:24px}
+main{max-width:1080px;margin:0 auto}
+h1{font-size:26px;letter-spacing:-.8px;margin:0 0 5px}
+h2{font-size:18px;margin:0 0 15px}
+p,.muted{color:#95a4b9}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:28px}
+.panel{background:#172234;border:1px solid #304054;border-radius:15px;padding:20px;margin-bottom:20px}
+.badge{display:inline-block;padding:6px 10px;border-radius:12px;background:#363a43;color:#dfe4ee;font-size:13px}
+.online{background:#123c32;color:#6de8bd}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.metric{padding:18px;border-radius:10px;background:#1d2c40}
+.metric strong{display:block;font-size:26px;padding-top:6px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-weight:500;color:#8da4bb;font-size:13px}
+th,td{padding:12px 10px;border-bottom:1px solid #293a4f}
+code{font-size:12px;color:#c5e3fa;word-break:break-all}
+button{border:0;padding:9px 14px;border-radius:9px;background:#0f9c78;color:white;font-weight:650;cursor:pointer}
+button.secondary{background:#34465d}
+button:disabled{opacity:.42;cursor:default}
+footer{font-size:13px;color:#8ea3b9;margin-top:20px}
+input{background:#0a1220;color:white;padding:10px;border-radius:8px;border:1px solid #44546b;box-sizing:border-box;width:100%;font:inherit}
+form{display:flex;gap:10px;margin-top:12px}
+form input{max-width:375px}
+#message{min-height:22px;color:#f9c776}
+@media(max-width:650px){.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}table{font-size:12px}th,td{padding:9px 5px}}
+</style>
+</head>
+<body><main>
+<div class="top"><div><h1>ESP32 AutoMesh <span class="badge">v0.1 prototype</span></h1><p>Управление Bluetooth Mesh и подтверждение новых устройств</p></div>
+<span id="status" class="badge">COM12: проверка соединения</span></div>
+<div class="grid">
+<div class="metric">Найденные устройства<strong id="total">0</strong></div>
+<div class="metric">Ожидают подтверждения<strong id="pending">0</strong></div>
+<div class="metric">Успешно зарегистрированы<strong id="joined">0</strong></div>
+</div>
+<section class="panel" style="margin-top:20px"><h2>Устройства</h2><div style="overflow-x:auto"><table>
+<thead><tr><th>UUID / модель</th><th>Адрес BLE</th><th>Состояние</th><th>Действие</th></tr></thead>
+<tbody id="devices"><tr><td colspan="4" class="muted">Пока нет обнаруженных устройств</td></tr></tbody>
+</table></div><p id="message" role="status"></p></section>
+<section class="panel"><h2>Обновление прошивок по Mesh</h2>
+<p>Адресная передача образов OTA, SHA-256, подпись, резервный раздел и откат.</p>
+<button disabled title="Функция ещё не реализована">Выбрать прошивку .bin</button>
+<span class="muted"> На данном этапе недоступно: сначала проверяем безопасную регистрацию.</span>
+</section>
+<footer>Панель привязана к 127.0.0.1 и не доступна извне без отдельного защищённого шлюза.
+Для подтверждения нужен 16-байтный OOB-ключ устройства, предварительно записанный в его прошивку.</footer>
+</main>
+<script>
+const token="__CSRF_TOKEN__";
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const stateText={awaiting_confirmation:'Ожидает подтверждения',provisioning:'Регистрация…',provisioned:'В сети',denied:'Отклонено',error:'Ошибка'};
+async function command(action,uuid){
+ let oob;
+ if(action==='approve'){
+   oob=prompt('Введите индивидуальный OOB-ключ устройства: 32 шестнадцатеричных символа');
+   if(oob===null)return;
+   if(!/^[a-fA-F0-9]{32}$/.test(oob)){alert('Нужны ровно 32 шестнадцатеричных символа');return;}
+ }
+ const payload={uuid};if(oob)payload.oob=oob;
+ try{const r=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':token},body:JSON.stringify(payload)});
+ const data=await r.json();
+ document.getElementById('message').textContent=r.ok?'Команда передана шлюзу: '+uuid:'Ошибка: '+(data.error||r.status);
+ await refresh();
+ }catch(e){document.getElementById('message').textContent='Не удалось отправить команду';}
+}
+async function refresh(){
+ try{
+  const resp=await fetch('/api/status',{cache:'no-store'}),data=await resp.json();
+  const status=document.getElementById('status');
+  status.textContent=data.port+': '+(data.connection==='connected'?'подключён':'нет связи');
+  status.className='badge '+(data.connection==='connected'?'online':'');
+  document.getElementById('total').textContent=data.devices.length;
+  document.getElementById('pending').textContent=data.devices.filter(d=>d.state==='awaiting_confirmation').length;
+  document.getElementById('joined').textContent=data.devices.filter(d=>d.state==='provisioned').length;
+  const body=document.getElementById('devices');
+  body.replaceChildren();
+  if(!data.devices.length){
+   const row=document.createElement('tr');row.innerHTML='<td colspan="4" class="muted">Пока нет обнаруженных устройств</td>';body.append(row);
+  }
+  for(const d of data.devices){
+   const row=document.createElement('tr');
+   row.innerHTML='<td><code>'+esc(d.uuid)+'</code></td><td><code>'+esc(d.address||'—')+'</code></td><td>'+esc(stateText[d.state]||d.state)+'</td><td></td>';
+   if(d.state==='awaiting_confirmation'||d.state==='error'){
+     const yes=document.createElement('button');yes.textContent='Разрешить';yes.onclick=()=>command('approve',d.uuid);
+     const no=document.createElement('button');no.className='secondary';no.textContent='Отклонить';no.style.marginLeft='7px';no.onclick=()=>command('deny',d.uuid);
+     row.lastElementChild.append(yes,no);
+   }
+   body.append(row);
+  }
+ }catch(e){document.getElementById('status').textContent='Нет связи с веб-сервером';}
+}
+refresh();setInterval(refresh,2000);
+</script>
+</body></html>
+

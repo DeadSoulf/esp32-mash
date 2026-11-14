@@ -57,3 +57,66 @@ jobs:
             ${{ matrix.project }}/build/partition_table/partition-table.bin
             ${{ matrix.project }}/build/flasher_args.json
 
+
+  package-windows-installer:
+    name: Package and publish Windows C3/S3 installer
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: automesh-*
+          path: _artifacts
+          merge-multiple: false
+      - name: Install installer build tools
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check esptool==5.6.0 pyserial pyinstaller
+      - name: Stage four matched firmware profiles and hashes
+        shell: pwsh
+        run: |
+          python Windows-Installer/build_release.py --artifacts _artifacts --out _release
+      - name: Build and verify self-contained installer
+        shell: pwsh
+        run: |
+          python -m PyInstaller --onefile --console --noconfirm --clean --name AutoMesh-Installer --add-data "_release/manifest.json;." --add-data "_release/images;images" --collect-submodules esptool --collect-data esptool --collect-submodules serial --distpath "_release" Windows-Installer/installer.py
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+          & "./_release/AutoMesh-Installer.exe" --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Installer self-test failed" }
+      - name: Package portable ZIP with sources, licenses and flashing instructions
+        shell: pwsh
+        run: |
+          Copy-Item Windows-Installer/installer.py _release/
+          Copy-Item Windows-Installer/Install-AutoMesh.cmd _release/
+          Copy-Item Windows-Installer/Check-AutoMesh.cmd _release/
+          Copy-Item Windows-Installer/README-RU.txt _release/
+          Copy-Item Windows-Installer/THIRD-PARTY-LICENSES _release/THIRD-PARTY-LICENSES -Recurse
+          Compress-Archive -Path _release/* -DestinationPath AutoMesh-Windows-Installer-v0.3.2-dev.zip -CompressionLevel Optimal -Force
+          Get-FileHash AutoMesh-Windows-Installer-v0.3.2-dev.zip -Algorithm SHA256 | Format-List
+      - name: Upload portable installer archive as CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: automesh-installer-windows-v0.3.2-dev
+          path: AutoMesh-Windows-Installer-v0.3.2-dev.zip
+          retention-days: 14
+          if-no-files-found: error
+      - name: Publish pre-release for Windows downloads
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "v0.3.2-dev" --repo "${{ github.repository }}" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "v0.3.2-dev" --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" --title "ESP32 AutoMesh v0.3.2-dev (C3 + S3)" --notes "Windows initial USB installer: ESP32-C3 and ESP32-S3, 4MB Flash, gateway/node firmware. Verify exact board pinout, create full Flash backup before first write. ESP32-S3 generic LED is disabled until board GPIO/type is verified."
+            if ($LASTEXITCODE -ne 0) { throw "Release creation failed" }
+          }
+          gh release upload "v0.3.2-dev" "AutoMesh-Windows-Installer-v0.3.2-dev.zip" --clobber --repo "${{ github.repository }}"
+          if ($LASTEXITCODE -ne 0) { throw "Release upload failed" }

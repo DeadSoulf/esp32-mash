@@ -163,7 +163,7 @@ static bool authorize(httpd_req_t *req)
     }
     const int64_t now=esp_timer_get_time();
     if (auth_lock_until_us > now) {
-        char retry[12];
+        char retry[24];
         const int64_t remaining_us=auth_lock_until_us-now;
         const int64_t seconds=(remaining_us+999999LL)/1000000LL;
         snprintf(retry,sizeof(retry),"%lld",(long long)seconds);

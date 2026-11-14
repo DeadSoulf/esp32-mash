@@ -70,6 +70,60 @@ class USBInstallerTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.installer.prompt_device(DEVICES,None)
 
+    def test_install_uses_only_role_and_one_confirmation_with_explicit_port(self):
+        from pathlib import Path
+        dev=DEVICES[0]
+        manifest={"schema":2,"profiles":{"esp32c3-supermini-4mb":{"roles":{"gateway":{},"node":{}}}}}
+        profile={"board_profile":"ESP32-C3 SuperMini", "led_profile":"GPIO8"}
+        with patch.object(self.installer,"read_manifest",return_value=manifest), \
+             patch.object(self.installer,"identify",return_value=dev) as identify, \
+             patch.object(self.installer,"matching_profile",return_value=("esp32c3-supermini-4mb",profile)), \
+             patch.object(self.installer,"role_assets",return_value={"application.bin":Path("app.bin")}), \
+             patch.object(self.installer,"backup_flash",return_value=Path("saved.bin")) as backup, \
+             patch.object(self.installer,"existing_role",return_value="node"), \
+             patch.object(self.installer,"flash_device") as flash, \
+             patch("builtins.input",side_effect=["1","1"]) as question, \
+             patch.object(sys,"argv",["installer.py","--port","COM12"]):
+            self.assertEqual(self.installer.main(),0)
+        self.assertEqual(question.call_count,2)  # Role + one final confirmation
+        self.assertEqual(identify.call_count,2)   # Before and after backing up
+        backup.assert_called_once_with(dev)
+        flash.assert_called_once()
+        self.assertFalse(flash.call_args.kwargs["reset_nvs"])
+
+    def test_cancel_last_step_does_not_flash(self):
+        from pathlib import Path
+        dev=DEVICES[0]
+        manifest={"schema":2,"profiles":{"c3":{"roles":{"gateway":{},"node":{}}}}}
+        with patch.object(self.installer,"read_manifest",return_value=manifest), \
+             patch.object(self.installer,"identify",return_value=dev), \
+             patch.object(self.installer,"matching_profile",return_value=("c3",{"board_profile":"C3","led_profile":"GPIO8"})), \
+             patch.object(self.installer,"role_assets",return_value={"application.bin":Path("app.bin")}), \
+             patch.object(self.installer,"backup_flash",return_value=Path("saved.bin")), \
+             patch.object(self.installer,"existing_role",return_value="node"), \
+             patch.object(self.installer,"flash_device") as flash, \
+             patch("builtins.input",side_effect=["1","0"]) as question, \
+             patch.object(sys,"argv",["installer.py","--port","COM12"]):
+            self.assertEqual(self.installer.main(),5)
+        self.assertEqual(question.call_count,2)
+        flash.assert_not_called()
+
+    def test_nvs_erasure_requires_explicit_cli_flag(self):
+        from pathlib import Path
+        dev=DEVICES[0]
+        manifest={"schema":2,"profiles":{"c3":{"roles":{"gateway":{},"node":{}}}}}
+        with patch.object(self.installer,"read_manifest",return_value=manifest), \
+             patch.object(self.installer,"identify",return_value=dev), \
+             patch.object(self.installer,"matching_profile",return_value=("c3",{"board_profile":"C3","led_profile":"GPIO8"})), \
+             patch.object(self.installer,"role_assets",return_value={"application.bin":Path("app.bin")}), \
+             patch.object(self.installer,"backup_flash",return_value=Path("saved.bin")), \
+             patch.object(self.installer,"existing_role",return_value="node"), \
+             patch.object(self.installer,"flash_device") as flash, \
+             patch("builtins.input",side_effect=["1","1"]), \
+             patch.object(sys,"argv",["installer.py","--port","COM12","--erase-nvs"]):
+            self.assertEqual(self.installer.main(),0)
+        self.assertTrue(flash.call_args.kwargs["reset_nvs"])
+
 
 class WebGatewayOTATests(unittest.TestCase):
     def test_ota_only_runs_with_gateway_admin_and_valid_origin(self):

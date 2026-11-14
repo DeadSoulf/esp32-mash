@@ -1,6 +1,7 @@
 #include "automesh_web.h"
 #include "automesh_wifi_scan.h"
 #include "automesh_bridge.h"
+#include "automesh_admin.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,15 +17,14 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_http_server.h"
+#include "esp_timer.h"
 #include "nvs.h"
 #include "cJSON.h"
 
-#define ADMIN_LEN 32
-#define AP_PASSWORD_LEN 16
-#define MAX_BODY 256
+#define MAX_BODY 512
 static const char *TAG="AUTOMESH_WEB";
-static char admin_key[ADMIN_LEN+1];
-static char ap_password[AP_PASSWORD_LEN+1];
+static unsigned failed_auth_count=0;
+static int64_t auth_lock_until_us=0;
 static char ap_ssid[33];
 static char sta_ssid[33];
 static char sta_pass[64];
@@ -44,33 +44,6 @@ extern const char gateway_index_html_end[] asm("_binary_gateway_index_html_end")
 extern esp_err_t automesh_gateway_ping(uint16_t address);
 extern esp_err_t automesh_gateway_locate(uint16_t address,uint8_t seconds);
 extern int automesh_gateway_locate_status_json(char *out,size_t capacity);
-
-static esp_err_t secret_get_or_make(nvs_handle_t h,const char *key,char *out,size_t length,bool hex)
-{
-    size_t sz=length+1;
-    esp_err_t e=nvs_get_str(h,key,out,&sz);
-    if(e==ESP_OK && strlen(out)==length) return ESP_OK;
-    if(e!=ESP_ERR_NVS_NOT_FOUND && e!=ESP_OK) return e;
-    static const char alphabet[]="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-    static const char digits[]="0123456789abcdef";
-    for(size_t i=0;i<length;i++) {
-        out[i]= hex?digits[esp_random()%16]:alphabet[esp_random()%(sizeof(alphabet)-1)];
-    }
-    out[length]=0;
-    e=nvs_set_str(h,key,out);
-    if(e==ESP_OK)e=nvs_commit(h);
-    return e;
-}
-static esp_err_t load_credentials(void)
-{
-    nvs_handle_t h;
-    esp_err_t e=nvs_open("meshweb",NVS_READWRITE,&h);
-    if(e!=ESP_OK)return e;
-    e=secret_get_or_make(h,"ap_pass",ap_password,AP_PASSWORD_LEN,false);
-    if(e==ESP_OK)e=secret_get_or_make(h,"admin",admin_key,ADMIN_LEN,true);
-    nvs_close(h);
-    return e;
-}
 
 static bool valid_network(const char *ssid,const char *password)
 {
@@ -182,21 +155,34 @@ static esp_err_t store_home_network(const char *ssid,const char *password)
     return e;
 }
 
-static bool constant_time_eq(const char *a,const char *b,size_t n)
-{
-    uint8_t diff=0;
-    for(size_t i=0;i<n;i++)diff|=(uint8_t)(a[i]^b[i]);
-    return diff==0;
-}
 static bool authorize(httpd_req_t *req)
 {
-    char provided[ADMIN_LEN+2]={0};
-    if(httpd_req_get_hdr_value_str(req,"X-Automesh-Admin",provided,sizeof(provided))!=ESP_OK ||
-       strlen(provided)!=ADMIN_LEN ||
-       !constant_time_eq(provided,admin_key,ADMIN_LEN)) {
-        httpd_resp_send_err(req,HTTPD_401_UNAUTHORIZED,"Admin token required");
+    if (!automesh_admin_is_configured()) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Create administrator first");
         return false;
     }
+    const int64_t now=esp_timer_get_time();
+    if (auth_lock_until_us > now) {
+        httpd_resp_set_status(req, "429 Too Many Requests");
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        httpd_resp_sendstr(req, "Too many invalid keys; try again shortly");
+        return false;
+    }
+    char provided[AUTOMESH_ADMIN_MAX_BYTES+1] = {0};
+    bool ok = httpd_req_get_hdr_value_str(req, "X-Automesh-Admin",
+                            provided, sizeof(provided)) == ESP_OK &&
+              automesh_admin_verify(provided);
+    memset(provided, 0, sizeof(provided));
+    if (!ok) {
+        if (++failed_auth_count >= 8) {
+            auth_lock_until_us = now + 30000000LL;
+            failed_auth_count = 0;
+        }
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Invalid administrator key");
+        return false;
+    }
+    failed_auth_count = 0;
+    auth_lock_until_us = 0;
     return true;
 }
 static esp_err_t json_reply(httpd_req_t *req,const char *status,const char *json)
@@ -241,12 +227,19 @@ static esp_err_t locate_status_handler(httpd_req_t *req)
         return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Locate status unavailable");
     return json_reply(req,"200 OK",body);
 }
+static esp_err_t bootstrap_handler(httpd_req_t *req)
+{
+    // Public, non-secret state. Required to display first-boot setup form.
+    return json_reply(req, "200 OK",
+        automesh_admin_is_configured() ?
+        "{\"admin_required\":false}" : "{\"admin_required\":true}");
+}
 static esp_err_t status_handler(httpd_req_t *req)
 {
     if(!authorize(req))return ESP_OK;
     cJSON *doc=cJSON_CreateObject();
     if(!doc)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
-    cJSON_AddStringToObject(doc,"version","0.3.2-dev");
+    cJSON_AddStringToObject(doc,"version","0.3.3-dev");
     cJSON_AddStringToObject(doc,"ssid",setup_mode?ap_ssid:sta_ssid);
     cJSON_AddStringToObject(doc,"ip",ip_string);
     cJSON_AddStringToObject(doc,"mode",setup_mode?"setup_ap":"sta");
@@ -284,6 +277,47 @@ static cJSON *read_post_json(httpd_req_t *req)
     return cJSON_ParseWithLength(body,offset);
 }
 
+
+static esp_err_t admin_setup_handler(httpd_req_t *req)
+{
+    if (!valid_origin(req))
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Invalid Origin");
+    if (!setup_mode || automesh_admin_is_configured())
+        return json_reply(req, "409 Conflict", "{\"error\":\"already_configured_or_not_in_setup\"}");
+    cJSON *body = read_post_json(req);
+    if (!body) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+    const cJSON *secret = cJSON_GetObjectItemCaseSensitive(body, "key");
+    esp_err_t result = ESP_ERR_INVALID_ARG;
+    if (cJSON_IsString(secret) && secret->valuestring)
+        result = automesh_admin_set_initial(secret->valuestring);
+    cJSON_Delete(body);
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "Administrator key stored securely in gateway NVS");
+        return json_reply(req, "201 Created", "{\"configured\":true}");
+    }
+    return json_reply(req, result == ESP_ERR_INVALID_STATE ? "409 Conflict" : "400 Bad Request",
+                      "{\"error\":\"invalid_key_or_already_configured\"}");
+}
+static esp_err_t admin_change_handler(httpd_req_t *req)
+{
+    if (!authorize(req)) return ESP_OK;
+    if (!valid_origin(req))
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Invalid Origin");
+    cJSON *body = read_post_json(req);
+    if (!body) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+    const cJSON *secret = cJSON_GetObjectItemCaseSensitive(body, "key");
+    esp_err_t result = ESP_ERR_INVALID_ARG;
+    if (cJSON_IsString(secret) && secret->valuestring)
+        result = automesh_admin_change(secret->valuestring);
+    cJSON_Delete(body);
+    if (result == ESP_OK) {
+        failed_auth_count = 0;
+        auth_lock_until_us = 0;
+        ESP_LOGI(TAG, "Administrator key changed and saved in NVS");
+        return json_reply(req, "200 OK", "{\"changed\":true}");
+    }
+    return json_reply(req, "400 Bad Request", "{\"error\":\"invalid_administrator_key\"}");
+}
 
 static esp_err_t wifi_scan_status_handler(httpd_req_t *req)
 {
@@ -374,7 +408,7 @@ static esp_err_t action_handler(httpd_req_t *req)
 
 esp_err_t automesh_web_start(void)
 {
-    esp_err_t e=load_credentials();
+    esp_err_t e=automesh_admin_init();
     if(e!=ESP_OK)return e;
     setup_mode=!load_home_network();
     uint8_t mac[6]={0};
@@ -409,11 +443,13 @@ esp_err_t automesh_web_start(void)
     wifi_config_t cfg={0};
     if(setup_mode) {
         strlcpy((char*)cfg.ap.ssid,ap_ssid,sizeof(cfg.ap.ssid));
-        strlcpy((char*)cfg.ap.password,ap_password,sizeof(cfg.ap.password));
+        // Initial setup AP is intentionally open when no router is configured.
+        // First administrator must immediately set a key via /api/admin/setup.
+        cfg.ap.password[0] = '\0';
         cfg.ap.ssid_len=strlen(ap_ssid);
         cfg.ap.channel=1;
         cfg.ap.max_connection=4;
-        cfg.ap.authmode=WIFI_AUTH_WPA2_PSK;
+        cfg.ap.authmode=WIFI_AUTH_OPEN;
         cfg.ap.ssid_hidden=0;
         cfg.ap.beacon_interval=100;
         e=esp_wifi_set_config(WIFI_IF_AP,&cfg);
@@ -431,12 +467,15 @@ esp_err_t automesh_web_start(void)
     e=automesh_wifi_scan_init();
     if(e!=ESP_OK)return e;
     httpd_config_t hc=HTTPD_DEFAULT_CONFIG();
-    hc.max_uri_handlers=14;
+    hc.max_uri_handlers=18;
     hc.stack_size=6144;
     hc.lru_purge_enable=true;
     e=httpd_start(&server,&hc);
     if(e!=ESP_OK)return e;
 
+    httpd_uri_t boot={.uri="/api/bootstrap",.method=HTTP_GET,.handler=bootstrap_handler};
+    httpd_uri_t admin_create={.uri="/api/admin/setup",.method=HTTP_POST,.handler=admin_setup_handler};
+    httpd_uri_t admin_change={.uri="/api/admin/change",.method=HTTP_POST,.handler=admin_change_handler};
     httpd_uri_t index={.uri="/",.method=HTTP_GET,.handler=index_handler};
     httpd_uri_t devices={.uri="/api/devices",.method=HTTP_GET,.handler=list_handler};
     httpd_uri_t status={.uri="/api/status",.method=HTTP_GET,.handler=status_handler};
@@ -449,7 +488,10 @@ esp_err_t automesh_web_start(void)
     httpd_uri_t wifi={.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_setup_handler};
     httpd_uri_t wifi_scan={.uri="/api/wifi/scan",.method=HTTP_POST,.handler=wifi_scan_begin_handler};
     httpd_uri_t wifi_list={.uri="/api/wifi/networks",.method=HTTP_GET,.handler=wifi_scan_status_handler};
-    e=httpd_register_uri_handler(server,&index);
+    e=httpd_register_uri_handler(server,&boot);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&admin_create);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&admin_change);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&index);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&devices);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&status);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&approve);
@@ -466,17 +508,19 @@ esp_err_t automesh_web_start(void)
     if(setup_mode) {
         // Printed only to physical USB console; no secrets enter browser until authenticated.
         ESP_LOGI(TAG,"WiFi AP: %s",ap_ssid);
-        ESP_LOGI(TAG,"WiFi password: %s",ap_password);
-        ESP_LOGI(TAG,"Admin token: %s",admin_key);
+        ESP_LOGI(TAG,"Wi-Fi setup AP is OPEN (no password)");
+        ESP_LOGI(TAG,"Administrator configured: %s",
+                 automesh_admin_is_configured() ? "yes" : "no; visit the page to set a key");
         ESP_LOGI(TAG,"SETUP ONLY: Mesh disabled until station Wi-Fi is configured");
         ESP_LOGI(TAG,"Wi-Fi scan available from browser; setup uses AP+STA without Mesh");
         ESP_LOGI(TAG,"Open http://192.168.4.1/ to configure router Wi-Fi");
     } else {
         ESP_LOGI(TAG,"STA+MESH mode started. Router network: %s",sta_ssid);
-        ESP_LOGI(TAG,"Admin token: %s",admin_key);
+        ESP_LOGI(TAG,"Administrator key is stored in NVS, not printed to console");
         ESP_LOGI(TAG,"Waiting for Wi-Fi IP address from router");
     }
     return ESP_OK;
 }
+
 
 

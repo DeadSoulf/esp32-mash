@@ -52,14 +52,38 @@ small{color:#9eb4c8}
 <body>
 <main>
 <header><div><h1>ESP32 AutoMesh</h1><p class="sub">Встроенная панель Bluetooth Mesh шлюза</p></div><div id="connection" class="badge warn">Ожидаю ключ администратора</div></header>
-<section class="panel">
+<section class="panel" id="firstAdmin" hidden>
+<h2>Первый запуск — создание администратора</h2>
+<p class="sub">Шлюз пока не подключён к домашней сети. Его Wi-Fi AutoMesh доступен без пароля.
+Настройку необходимо выполнить рядом с устройством: пока сеть открыта, любой поблизости может подключиться и попытаться стать первым администратором.</p>
+<form id="createAdminForm">
+<div class="formfield"><label for="newAdminKey">Придумайте ключ администратора (не менее 6 символов)</label>
+<input id="newAdminKey" type="password" autocomplete="new-password" minlength="6" maxlength="64" required placeholder="Желательно от 12 символов"></div>
+<div class="formfield"><label for="newAdminConfirm">Повторите ключ</label>
+<input id="newAdminConfirm" type="password" autocomplete="new-password" minlength="6" maxlength="64" required></div>
+<button type="submit">Создать администратора</button>
+</form>
+<p class="sub">Ключ будет храниться в защищённом виде в памяти ESP32. После создания подключите шлюз к Wi-Fi роутеру.</p>
+<p id="firstAdminMessage" class="msg" role="status"></p>
+</section>
+<section class="panel" id="authPanel" hidden>
 <h2>Доступ к панели</h2>
-<p class="sub">Ключ администратора напечатан шлюзом в USB-журнале при запуске. Wi-Fi пароль не является ключом администратора.</p>
+<p class="sub">Введите собственный ключ администратора. Для старого шлюза пока действует прежний ключ из USB-журнала, пока вы его не измените.</p>
 <form id="authform">
-<div class="formfield"><label for="secret">Ключ администратора</label><input id="secret" type="password" autocomplete="off" spellcheck="false" placeholder="32 символа" minlength="32" maxlength="32" required></div>
+<div class="formfield"><label for="secret">Ключ администратора</label><input id="secret" type="password" autocomplete="current-password" spellcheck="false" placeholder="Ключ администратора" minlength="6" maxlength="64" required></div>
 <button type="submit">Подключиться</button><button type="button" id="logout" class="secondary">Отключиться</button>
 </form>
 <p id="message" class="msg" role="status"></p>
+</section>
+<section id="adminChange" class="panel" hidden>
+<h2>Сменить ключ администратора</h2>
+<form id="changeAdminForm">
+<div class="formfield"><label for="changeAdminKey">Новый ключ (не менее 6 символов)</label>
+<input id="changeAdminKey" type="password" autocomplete="new-password" minlength="6" maxlength="64" required></div>
+<div class="formfield"><label for="changeAdminConfirm">Повторите новый ключ</label>
+<input id="changeAdminConfirm" type="password" autocomplete="new-password" minlength="6" maxlength="64" required></div>
+<button type="submit">Сохранить новый ключ</button>
+</form>
 </section>
 <section id="wifiSetup" class="panel" hidden>
 <h2>Настройки Wi-Fi шлюза</h2>
@@ -108,7 +132,32 @@ small{color:#9eb4c8}
 let token=sessionStorage.getItem('automesh_admin')||'';
 const $=id=>document.getElementById(id);
 $('secret').value=token;
-function message(s){$('message').textContent=s;}
+function message(s){$('message').textContent=s;$('firstAdminMessage').textContent=s;}
+function validAdminKey(s){
+ return Array.from(s).length>=6 &&
+   Array.from(s).length<=64 &&
+   new TextEncoder().encode(s).length<=64 &&
+   !/[\u0000-\u001f\u007f]/.test(s);
+}
+async function bootstrapAdmin(){
+ try {
+   const response=await fetch('/api/bootstrap',{cache:'no-store'});
+   if(!response.ok)throw Error('HTTP '+response.status);
+   const cfg=await response.json();
+   $('firstAdmin').hidden=!cfg.admin_required;
+   $('authPanel').hidden=!!cfg.admin_required;
+   if(cfg.admin_required) {
+     token='';
+     sessionStorage.removeItem('automesh_admin');
+     $('secret').value='';
+     $('wifiSetup').hidden=true;
+     $('adminChange').hidden=true;
+     $('connection').textContent='Нужно создать администратора';
+     $('connection').className='badge warn';
+   }
+ }catch(e){$('connection').textContent='Нет связи со шлюзом';message('Ошибка загрузки: '+e.message);}
+}
+
 function uiState(s){return ({online:'В сети',offline:'Нет связи',needs_repair:'Нужна настройка Mesh',pending:'Ожидает подтверждения',denied:'Отклонено',provisioning:'Регистрация...'})[s]||'Неизвестно';}
 function badgeStyle(s){return s==='online'?'good':s==='offline'||s==='needs_repair'?'offline':s==='pending'?'warn':'';}
 async function api(path,method='GET',body){
@@ -123,6 +172,7 @@ async function update(){
  try{
  const [state, list]=await Promise.all([api('/api/status'),api('/api/devices')]);
  $('connection').textContent='Шлюз доступен';$('connection').className='badge good';
+ $('adminChange').hidden=false;
  $('ssid').textContent=state.ssid;
  $('webAddress').textContent=state.ip;
  $('wifiSetup').hidden=false;
@@ -204,7 +254,7 @@ async function update(){
      }
    }
  }
- }catch(e){$('connection').textContent='Панель не авторизована';$('connection').className='badge warn';message('Ошибка: '+e.message);}
+ }catch(e){$('adminChange').hidden=true;$('connection').textContent='Панель не авторизована';$('connection').className='badge warn';message('Ошибка: '+e.message);}
 }
 
 let scanActive=false;
@@ -288,11 +338,53 @@ $('wifiForm').addEventListener('submit',async e=>{
     message('Настройки проверяются. Шлюз перезагружается; при неудачном подключении вернётся к прежней Wi-Fi сети. Новый IP смотри в USB-журнале.');
   }catch(err){message('Ошибка настройки Wi-Fi: '+err.message);}
 });
-$('authform').addEventListener('submit',e=>{e.preventDefault();let v=$('secret').value.trim();if(!/^[0-9a-fA-F]{32}$/.test(v)){message('Нужно 32 шестнадцатеричных символа');return;}token=v.toLowerCase();sessionStorage.setItem('automesh_admin',token);message('Проверяю ключ');update();});
-$('logout').addEventListener('click',()=>{token='';sessionStorage.removeItem('automesh_admin');$('secret').value='';$('devices').replaceChildren();$('connection').textContent='Не авторизован';$('connection').className='badge warn';});
-update();setInterval(update,3000);
+$('createAdminForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const key=$('newAdminKey').value;
+ if(!validAdminKey(key)){message('Ключ: не менее 6 символов, максимум 64 байта, без управляющих символов');return;}
+ if(key!==$('newAdminConfirm').value){message('Ключи не совпадают');return;}
+ try{
+   const response=await fetch('/api/admin/setup',{
+     method:'POST',cache:'no-store',
+     headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({key})
+   });
+   if(!response.ok){let reason='HTTP '+response.status;try{reason=(await response.json()).error||reason;}catch(_e){}throw Error(reason);}
+   token=key;
+   sessionStorage.setItem('automesh_admin',token);
+   $('newAdminKey').value='';$('newAdminConfirm').value='';
+   message('Администратор создан. Теперь выберите домашнюю сеть Wi-Fi.');
+   await bootstrapAdmin();await update();
+ }catch(err){message('Не удалось создать администратора: '+err.message);}
+});
+$('changeAdminForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const key=$('changeAdminKey').value;
+ if(!validAdminKey(key)){message('Ключ: минимум 6 символов, максимум 64 байта');return;}
+ if(key!==$('changeAdminConfirm').value){message('Новые ключи не совпадают');return;}
+ try{
+   await api('/api/admin/change','POST',{key});
+   token=key;
+   sessionStorage.setItem('automesh_admin',key);
+   $('secret').value=key;
+   $('changeAdminKey').value='';$('changeAdminConfirm').value='';
+   message('Новый ключ сохранён в шлюзе и будет действовать после перезагрузки.');
+ }catch(err){message('Ошибка смены ключа: '+err.message);}
+});
+$('authform').addEventListener('submit',e=>{
+ e.preventDefault();
+ const v=$('secret').value;
+ if(!v || new TextEncoder().encode(v).length>64){message('Введите действительный ключ администратора');return;}
+ token=v;
+ sessionStorage.setItem('automesh_admin',token);
+ message('Проверяю ключ');
+ update();
+});
+$('logout').addEventListener('click',()=>{token='';sessionStorage.removeItem('automesh_admin');$('secret').value='';$('devices').replaceChildren();$('adminChange').hidden=true;$('connection').textContent='Не авторизован';$('connection').className='badge warn';});
+bootstrapAdmin().then(update);setInterval(update,3000);
 </script>
 </body>
 </html>
+
 
 

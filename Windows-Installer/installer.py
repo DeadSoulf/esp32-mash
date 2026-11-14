@@ -228,7 +228,7 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true", help="проверить все встроенные образы без COM-портов")
     args = parser.parse_args()
 
-    line("ESP32 AutoMesh — установщик для Windows (v0.3.3-dev)")
+    line("ESP32 AutoMesh — установщик для Windows (v0.3.4-dev)")
     if args.self_test:
         manifest = read_manifest()
         count = 0
@@ -307,4 +307,5 @@ if __name__ == "__main__":
         print(f"\nОШИБКА: {exc}", flush=True)
         print("Если была начата запись, используйте резервную копию для восстановления.", flush=True)
         sys.exit(1)
+
 

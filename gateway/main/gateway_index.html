@@ -130,6 +130,8 @@ small{color:#9eb4c8}
 <script>
 'use strict';
 let token=sessionStorage.getItem('automesh_admin')||'';
+let authBlockedUntil=0;
+let updateBusy=false;
 const $=id=>document.getElementById(id);
 $('secret').value=token;
 function message(s){$('message').textContent=s;$('firstAdminMessage').textContent=s;}
@@ -160,17 +162,50 @@ async function bootstrapAdmin(){
 
 function uiState(s){return ({online:'В сети',offline:'Нет связи',needs_repair:'Нужна настройка Mesh',pending:'Ожидает подтверждения',denied:'Отклонено',provisioning:'Регистрация...'})[s]||'Неизвестно';}
 function badgeStyle(s){return s==='online'?'good':s==='offline'||s==='needs_repair'?'offline':s==='pending'?'warn':'';}
+function invalidateAuth(reason){
+ token='';
+ sessionStorage.removeItem('automesh_admin');
+ $('secret').value='';
+ $('wifiSetup').hidden=true;
+ $('adminChange').hidden=true;
+ $('devices').replaceChildren();
+ $('connection').textContent='Требуется вход';
+ $('connection').className='badge warn';
+ message(reason);
+}
 async function api(path,method='GET',body){
+ const keyUsed=token;
  const resp=await fetch(path,{method,cache:'no-store',
-   headers:{'X-Automesh-Admin':token,'Content-Type':'application/json'},
+   headers:{'X-Automesh-Admin':keyUsed,'Content-Type':'application/json'},
    body:body?JSON.stringify(body):undefined});
- if(!resp.ok){let detail='HTTP '+resp.status;try{detail=(await resp.json()).error||detail;}catch(e){}throw Error(detail);}
+ if(!resp.ok){
+   let detail='HTTP '+resp.status;
+   try{detail=(await resp.json()).error||detail;}catch(_e){}
+   const err=Error(detail);
+   err.status=resp.status;
+   if(keyUsed===token && resp.status===401){
+     invalidateAuth('Неверный ключ администратора. Проверьте его и войдите ещё раз.');
+   }
+   if(keyUsed===token && resp.status===429){
+     const retry=Number(resp.headers.get('Retry-After'));
+     const seconds=Number.isFinite(retry)&&retry>0&&retry<=120?Math.ceil(retry):30;
+     authBlockedUntil=Date.now()+seconds*1000;
+     invalidateAuth('Слишком много неверных попыток. Подождите '+seconds+' секунд, затем введите правильный ключ.');
+   }
+   throw err;
+ }
  return resp.json();
 }
 async function update(){
- if(!token)return;
+ if(!token || updateBusy || Date.now()<authBlockedUntil)return;
+ updateBusy=true;
  try{
- const [state, list]=await Promise.all([api('/api/status'),api('/api/devices')]);
+ // Validate the administrator key with a single request first.
+ // Never send two invalid requests in parallel; an error must stop polling.
+ const state=await api('/api/status');
+ if(!token)return;
+ const list=await api('/api/devices');
+ if(!token)return;
  $('connection').textContent='Шлюз доступен';$('connection').className='badge good';
  $('adminChange').hidden=false;
  $('ssid').textContent=state.ssid;
@@ -254,7 +289,13 @@ async function update(){
      }
    }
  }
- }catch(e){$('adminChange').hidden=true;$('connection').textContent='Панель не авторизована';$('connection').className='badge warn';message('Ошибка: '+e.message);}
+ }catch(e){
+   if(e.status!==401 && e.status!==429){
+     $('connection').textContent='Ошибка соединения';
+     $('connection').className='badge warn';
+     message('Ошибка: '+e.message);
+   }
+ }finally{updateBusy=false;}
 }
 
 let scanActive=false;
@@ -374,17 +415,19 @@ $('changeAdminForm').addEventListener('submit',async e=>{
 $('authform').addEventListener('submit',e=>{
  e.preventDefault();
  const v=$('secret').value;
+ if(Date.now()<authBlockedUntil){message('Вход временно заблокирован. Повторите через '+Math.ceil((authBlockedUntil-Date.now())/1000)+' секунд.');return;}
  if(!v || new TextEncoder().encode(v).length>64){message('Введите действительный ключ администратора');return;}
  token=v;
  sessionStorage.setItem('automesh_admin',token);
  message('Проверяю ключ');
  update();
 });
-$('logout').addEventListener('click',()=>{token='';sessionStorage.removeItem('automesh_admin');$('secret').value='';$('devices').replaceChildren();$('adminChange').hidden=true;$('connection').textContent='Не авторизован';$('connection').className='badge warn';});
+$('logout').addEventListener('click',()=>invalidateAuth('Вы вышли из панели.'));
 bootstrapAdmin().then(update);setInterval(update,3000);
 </script>
 </body>
 </html>
+
 
 
 

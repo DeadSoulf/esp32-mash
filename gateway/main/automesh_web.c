@@ -163,7 +163,13 @@ static bool authorize(httpd_req_t *req)
     }
     const int64_t now=esp_timer_get_time();
     if (auth_lock_until_us > now) {
+        char retry[12];
+        const int64_t remaining_us=auth_lock_until_us-now;
+        const int64_t seconds=(remaining_us+999999LL)/1000000LL;
+        snprintf(retry,sizeof(retry),"%lld",(long long)seconds);
         httpd_resp_set_status(req, "429 Too Many Requests");
+        httpd_resp_set_hdr(req, "Retry-After", retry);
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
         httpd_resp_set_type(req, "text/plain; charset=utf-8");
         httpd_resp_sendstr(req, "Too many invalid keys; try again shortly");
         return false;
@@ -239,7 +245,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     if(!authorize(req))return ESP_OK;
     cJSON *doc=cJSON_CreateObject();
     if(!doc)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
-    cJSON_AddStringToObject(doc,"version","0.3.3-dev");
+    cJSON_AddStringToObject(doc,"version","0.3.4-dev");
     cJSON_AddStringToObject(doc,"ssid",setup_mode?ap_ssid:sta_ssid);
     cJSON_AddStringToObject(doc,"ip",ip_string);
     cJSON_AddStringToObject(doc,"mode",setup_mode?"setup_ap":"sta");
@@ -521,6 +527,7 @@ esp_err_t automesh_web_start(void)
     }
     return ESP_OK;
 }
+
 
 
 

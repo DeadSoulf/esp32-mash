@@ -148,6 +148,7 @@ typedef struct {
     int64_t started_us;
 } locate_session_t;
 static locate_session_t locate_session={0};
+static esp_err_t automesh_send_locate_after_bind(uint16_t address);
 
 static void locate_set_phase(uint16_t addr,locate_phase_t from,locate_phase_t to)
 {

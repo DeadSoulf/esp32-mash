@@ -2,6 +2,8 @@
 #include "automesh_wifi_scan.h"
 #include "automesh_bridge.h"
 #include "automesh_admin.h"
+#include "automesh_ota.h"
+#include "esp_ota_ops.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +40,7 @@ typedef struct {
 static esp_netif_t *wifi_interface=NULL;
 static char ip_string[16]="0.0.0.0";
 static httpd_handle_t server=NULL;
+extern void automesh_mark_boot_healthy(void);
 
 extern const char gateway_index_html_start[] asm("_binary_gateway_index_html_start");
 extern const char gateway_index_html_end[] asm("_binary_gateway_index_html_end");
@@ -110,6 +113,9 @@ static void wifi_handler(void *arg,esp_event_base_t base,int32_t id,void *data)
         snprintf(ip_string,sizeof(ip_string),IPSTR,IP2STR(&got->ip_info.ip));
         got_ip=true;
         promote_pending_wifi();
+        // New OTA image is accepted only after the configured router
+        // really gives an IP and the web server has started.
+        if(server)automesh_mark_boot_healthy();
         ESP_LOGI(TAG,"AutoMesh web panel ready: http://%s/",ip_string);
     }
 }
@@ -245,12 +251,19 @@ static esp_err_t status_handler(httpd_req_t *req)
     if(!authorize(req))return ESP_OK;
     cJSON *doc=cJSON_CreateObject();
     if(!doc)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
-    cJSON_AddStringToObject(doc,"version","0.3.5-dev");
+    cJSON_AddStringToObject(doc,"version","0.3.6-dev");
+#if CONFIG_IDF_TARGET_ESP32C3
+    cJSON_AddStringToObject(doc,"chip","ESP32-C3");
+#elif CONFIG_IDF_TARGET_ESP32S3
+    cJSON_AddStringToObject(doc,"chip","ESP32-S3");
+#endif
     cJSON_AddStringToObject(doc,"ssid",setup_mode?ap_ssid:sta_ssid);
     cJSON_AddStringToObject(doc,"ip",ip_string);
     cJSON_AddStringToObject(doc,"mode",setup_mode?"setup_ap":"sta");
     cJSON_AddBoolToObject(doc,"setup_mode",setup_mode);
     cJSON_AddBoolToObject(doc,"mesh_ota_ready",false);
+    cJSON_AddBoolToObject(doc,"host_ota_ready",
+        !setup_mode && esp_ota_get_next_update_partition(NULL)!=NULL);
     char *json=cJSON_PrintUnformatted(doc);
     cJSON_Delete(doc);
     if(!json)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
@@ -369,6 +382,17 @@ static esp_err_t wifi_setup_handler(httpd_req_t *req)
 }
 
 
+static esp_err_t host_ota_handler(httpd_req_t *req)
+{
+    if(!authorize(req))return ESP_OK;
+    if(!valid_origin(req))
+        return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"Invalid Origin");
+    if(setup_mode)
+        return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,
+                                   "Connect gateway to router before OTA");
+    return automesh_ota_upload(req);
+}
+
 static esp_err_t action_handler(httpd_req_t *req)
 {
     if(!authorize(req))return ESP_OK;
@@ -472,7 +496,9 @@ esp_err_t automesh_web_start(void)
     e=automesh_wifi_scan_init();
     if(e!=ESP_OK)return e;
     httpd_config_t hc=HTTPD_DEFAULT_CONFIG();
-    hc.max_uri_handlers=18;
+    hc.max_uri_handlers=20;
+    hc.recv_wait_timeout=20;
+    hc.send_wait_timeout=20;
     hc.stack_size=6144;
     hc.lru_purge_enable=true;
     e=httpd_start(&server,&hc);
@@ -490,6 +516,7 @@ esp_err_t automesh_web_start(void)
     httpd_uri_t locate={.uri="/api/locate",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t locate_status={.uri="/api/locate/status",.method=HTTP_GET,.handler=locate_status_handler};
     httpd_uri_t name={.uri="/api/name",.method=HTTP_POST,.handler=action_handler};
+    httpd_uri_t host_ota={.uri="/api/ota/gateway",.method=HTTP_POST,.handler=host_ota_handler};
     httpd_uri_t wifi={.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_setup_handler};
     httpd_uri_t wifi_scan={.uri="/api/wifi/scan",.method=HTTP_POST,.handler=wifi_scan_begin_handler};
     httpd_uri_t wifi_list={.uri="/api/wifi/networks",.method=HTTP_GET,.handler=wifi_scan_status_handler};
@@ -505,10 +532,13 @@ esp_err_t automesh_web_start(void)
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&locate);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&locate_status);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&name);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&host_ota);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi_scan);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi_list);
     if(e!=ESP_OK)return e;
+    if(!setup_mode && got_ip)
+        automesh_mark_boot_healthy();
 
     if(setup_mode) {
         // Printed only to physical USB console; no secrets enter browser until authenticated.
@@ -526,6 +556,7 @@ esp_err_t automesh_web_start(void)
     }
     return ESP_OK;
 }
+
 
 
 

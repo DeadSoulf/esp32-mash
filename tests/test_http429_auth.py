@@ -22,7 +22,7 @@ class AuthenticationPollingTests(unittest.TestCase):
         self.assertIn('httpd_resp_set_hdr(req, "Retry-After", retry)', WEB)
 
     def test_status_checks_are_serial_not_concurrent(self):
-        self.assertIn("if(!token || updateBusy || Date.now()<authBlockedUntil)return;", UI)
+        self.assertIn("if(!token || updateBusy || uploadingOta || Date.now()<authBlockedUntil)return;", UI)
         self.assertIn("updateBusy=true;", UI)
         self.assertIn("const state=await api('/api/status');", UI)
         self.assertIn("const list=await api('/api/devices');", UI)
@@ -32,4 +32,5 @@ class AuthenticationPollingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

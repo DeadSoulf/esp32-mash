@@ -871,7 +871,7 @@ static esp_err_t ble_mesh_init(void)
     return err;
 }
 
-static void automesh_mark_boot_healthy(void)
+void automesh_mark_boot_healthy(void)
 {
     const esp_partition_t *p = esp_ota_get_running_partition();
     esp_ota_img_states_t state;
@@ -928,9 +928,10 @@ void app_main(void)
     automesh_restore_nodes();
     automesh_bridge_start();
     ESP_ERROR_CHECK(automesh_web_start());
-    automesh_mark_boot_healthy();
+    // The web Wi-Fi callback confirms pending OTA only after DHCP succeeds.
     configASSERT(xTaskCreate(automesh_health_task, "mesh_health", 4096,
                              NULL, 4, NULL)==pdPASS);
 }
+
 
 

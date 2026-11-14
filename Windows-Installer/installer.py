@@ -145,7 +145,10 @@ def existing_role(backup: Path) -> str | None:
     content = backup.read_bytes()
     if b"AUTOMESH_WEB" in content and b"Wi-Fi STA" in content:
         return "gateway"
-    if b"AUTOMESH_NODE_OOB" in content:
+    if b"AUTOMESH_NODE_OOB" in content or (
+        b"BLE Mesh Node initialized" in content and
+        b"BLE Mesh node" in content
+    ):
         return "node"
     return None
 
@@ -169,36 +172,56 @@ def backup_flash(device: dict) -> Path:
 
 def prompt_device(devices: list[dict], chosen_port: str | None) -> dict:
     if not devices:
-        raise RuntimeError("Подходящие ESP32 на COM-портах не найдены.")
+        raise RuntimeError("Подключённые ESP32 не обнаружены.")
     if chosen_port:
-        selected = next((x for x in devices if x["port"].upper() == chosen_port.upper()), None)
-        if not selected:
-            raise RuntimeError(f"Порт {chosen_port} не определён как ESP32.")
+        selected=next((x for x in devices if x["port"].upper()==chosen_port.upper()),None)
+        if selected is None:
+            raise RuntimeError(f"Выбранный COM-порт {chosen_port} не обнаружен.")
+        line(f"По параметру --port выбрано устройство {selected['port']} / {selected['mac']}")
         return selected
-    if len(devices) == 1:
-        return devices[0]
+
+    line("\nВЫБОР КОНТРОЛЛЕРА — прошивка других плат не изменится:")
+    for i, dev in enumerate(devices,1):
+        line(f"  [{i}] {dev['port']:6} {dev['chip']:10} "
+             f"Flash {dev['flash']//1048576} МБ  MAC {dev['mac']}")
+    line("  [0] Отмена, ничего не записывать")
     while True:
         try:
-            index = int(input(f"Номер устройства для прошивки (1–{len(devices)}): ").strip())
-            if 1 <= index <= len(devices):
-                return devices[index-1]
-        except (ValueError, EOFError):
-            pass
-        line("Нужно ввести номер устройства из списка.")
+            choice=input("Введите номер нужного контроллера (0 — отмена): ").strip()
+        except EOFError:
+            raise RuntimeError("Выбор контроллера не подтверждён")
+        if choice == "0":
+            raise RuntimeError("Отменено пользователем")
+        if choice.isdigit() and 1<=int(choice)<=len(devices):
+            return devices[int(choice)-1]
+        line("Введите номер из списка. COM-порт не выбирается автоматически.")
 
 
 def choose_role(previous: str | None, requested: str | None) -> str:
-    if requested:
-        if previous and requested != previous:
-            line("ВНИМАНИЕ: указана другая роль, чем у найденной прошивки AutoMesh.")
-        return requested
+    line("\nВЫБОР ПРОШИВКИ:")
+    line("  [1] ШЛЮЗ / Gateway — веб-панель, Wi-Fi, Mesh")
+    line("  [2] УЗЕЛ / Node — Bluetooth Mesh устройство")
     if previous:
-        line(f"Роль определена по ранее установленной прошивке: {HEX_ROLE[previous]}")
-        return previous
-    line("\nНовый контроллер: роль по модели микросхемы определить невозможно.")
-    line("По умолчанию будет установлен УЗЕЛ. Для создания нового шлюза введите G.")
-    v = input("Роль: N (узел, по умолчанию) / G (шлюз): ").strip().upper()
-    return "gateway" if v == "G" else "node"
+        line(f"Ранее установленная роль (по дампу): {HEX_ROLE[previous]}")
+    if requested:
+        line(f"Роль по --role: {HEX_ROLE[requested]}")
+        return requested
+
+    while True:
+        try:
+            selected=input("Выберите роль [1/2] (0 — отмена): ").strip()
+        except EOFError:
+            raise RuntimeError("Роль не подтверждена")
+        if selected=="0":
+            raise RuntimeError("Отменено пользователем")
+        role={"1":"gateway","2":"node"}.get(selected)
+        if role:
+            if previous and previous!=role:
+                line("ПРЕДУПРЕЖДЕНИЕ: ранее была установлена другая роль.")
+                if input("Сменить роль? Введите СМЕНИТЬ: ").strip().upper()!="СМЕНИТЬ":
+                    continue
+            return role
+        line("Нужен явный выбор 1 или 2.")
 
 
 def flash_device(device: dict, profile: dict, files: dict[str, Path], reset_nvs=False) -> None:
@@ -228,7 +251,7 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true", help="проверить все встроенные образы без COM-портов")
     args = parser.parse_args()
 
-    line("ESP32 AutoMesh — установщик для Windows (v0.3.5-dev)")
+    line("ESP32 AutoMesh — установщик для Windows (v0.3.6-dev)")
     if args.self_test:
         manifest = read_manifest()
         count = 0
@@ -288,9 +311,16 @@ def main() -> int:
     line("NVS с прежними сетевыми и Mesh-ключами пока НЕ очищается.")
     reset_nvs = input("Очистить NVS после резервного копирования? (нет/да): ").strip().lower() == "да"
     line("Команда перезапишет содержимое платы. Это нельзя отменить без восстановления backup.")
-    if input("Для подтверждения введите ПРОШИТЬ (или FLASH): ").strip().upper() not in ("ПРОШИТЬ", "FLASH"):
+    line(f"Выбрано: {selected['port']} / {selected['mac']} / {HEX_ROLE[role]}")
+    if input(f"Для подтверждения наберите COM-порт {selected['port']}: ").strip().upper() != selected['port'].upper():
+        line("Контроллер не подтверждён; отмена.")
+        return 5
+    if input("Для записи введите ПРОШИТЬ (или FLASH): ").strip().upper() not in ("ПРОШИТЬ", "FLASH"):
         line("Отменено, резервная копия осталась на диске.")
         return 5
+    current=identify(selected["port"])
+    if current is None or any(current[k]!=selected[k] for k in ("chip","flash","mac","port")):
+        raise RuntimeError("Контроллер изменился после резервного копирования. Запись запрещена.")
     flash_device(selected, profile, files, reset_nvs=reset_nvs)
     line("\nПосле загрузки: шлюз создаёт Wi-Fi для настройки или подключается к роутеру.")
     line("Узел появляется в Mesh только после разрешения в веб-панели и ввода OOB.")
@@ -307,6 +337,7 @@ if __name__ == "__main__":
         print(f"\nОШИБКА: {exc}", flush=True)
         print("Если была начата запись, используйте резервную копию для восстановления.", flush=True)
         sys.exit(1)
+
 
 
 

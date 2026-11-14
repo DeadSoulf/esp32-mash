@@ -115,10 +115,23 @@ small{color:#9eb4c8}
 <tbody id="devices"><tr><td colspan="4" class="sub">Введите ключ администратора</td></tr></tbody>
 </table></div>
 </section>
+<section class="panel" id="gatewayOta" hidden>
+<h2>Обновление прошивки шлюза через веб-панель</h2>
+<p class="sub">Загружается только приложение шлюза <code>provisioner.bin</code>, собранное именно для вашего ESP32-C3 или ESP32-S3. Не выбирайте архив ZIP, дамп Flash, прошивку узла или bootloader. Обновление ручное, выполняется в резервный OTA-раздел; Wi-Fi, имена устройств и Mesh-ключи в NVS не стираются.</p>
+<form id="gatewayOtaForm">
+<div class="formfield"><label for="otaFirmware">Файл прошивки шлюза (.bin)</label>
+<input id="otaFirmware" type="file" accept=".bin,application/octet-stream" required></div>
+<div class="formfield"><label for="otaSha">SHA-256 файла (необязательно — для дополнительной сверки с опубликованным хешем)</label>
+<input id="otaSha" type="text" maxlength="64" placeholder="64 символа, если есть контрольная сумма"></div>
+<button id="otaUploadButton" type="submit">Проверить и обновить шлюз</button>
+</form>
+<p id="otaChip" class="sub">Определение модели шлюза...</p>
+<p id="otaProgress" class="sub" role="status">Обновление не запускалось.</p>
+<p class="sub">После загрузки и проверки ESP32 перезагрузится. При неудачном запуске механизм загрузчика может откатить обновление. Сохраните резервную копию перед обновлением.</p>
+</section>
 <section class="panel">
-<h2>Обновление прошивок OTA</h2>
-<p class="sub">Загрузка прошивок выбранному устройству по цепочке Bluetooth Mesh будет добавлена после проверки регистрации и контрольных сообщений. Разделы OTA уже предусмотрены.</p>
-<button disabled>Обновить выбранную ESP32</button>
+<h2>Обновление прошивки узлов по BLE Mesh</h2>
+<p class="sub">Отправка прошивок удалённым узлам через BLE Mesh пока не реализована. Не используйте функцию обновления шлюза для узлов: для них пока предусмотрена USB-прошивка.</p>
 </section>
 <section class="panel">
 <h2>Радиосвязь и индикация</h2>
@@ -132,6 +145,7 @@ small{color:#9eb4c8}
 let token=sessionStorage.getItem('automesh_admin')||'';
 let authBlockedUntil=0;
 let updateBusy=false;
+let uploadingOta=false;
 const $=id=>document.getElementById(id);
 $('secret').value=token;
 function message(s){$('message').textContent=s;$('firstAdminMessage').textContent=s;}
@@ -154,6 +168,7 @@ async function bootstrapAdmin(){
      $('secret').value='';
      $('wifiSetup').hidden=true;
      $('adminChange').hidden=true;
+ $('gatewayOta').hidden=true;
      $('connection').textContent='Нужно создать администратора';
      $('connection').className='badge warn';
    }
@@ -197,7 +212,7 @@ async function api(path,method='GET',body){
  return resp.json();
 }
 async function update(){
- if(!token || updateBusy || Date.now()<authBlockedUntil)return;
+ if(!token || updateBusy || uploadingOta || Date.now()<authBlockedUntil)return;
  updateBusy=true;
  try{
  // Validate the administrator key with a single request first.
@@ -208,6 +223,9 @@ async function update(){
  if(!token)return;
  $('connection').textContent='Шлюз доступен';$('connection').className='badge good';
  $('adminChange').hidden=false;
+ $('gatewayOta').hidden=!state.host_ota_ready;
+ $('otaChip').textContent='Модель шлюза: '+(state.chip||'не определена')+
+  '. Выберите файл шлюза для этой модели; контроллер также проверит заголовок прошивки.';
  $('ssid').textContent=state.ssid;
  $('webAddress').textContent=state.ip;
  $('wifiSetup').hidden=false;
@@ -363,6 +381,64 @@ async function scanWifi(){
 }
 $('scanWifi').addEventListener('click',scanWifi);
 
+$('gatewayOtaForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ if(uploadingOta)return;
+ if(!token){message('Сначала войдите в шлюз.');return;}
+ const file=$('otaFirmware').files[0];
+ if(!file){message('Выберите файл provisioner.bin');return;}
+ if(!/\.bin$/i.test(file.name)||!/provisioner|application/i.test(file.name)){
+   $('otaProgress').textContent='Выбран не файл приложения шлюза. Используйте provisioner.bin.';
+   return;
+ }
+ if(file.size<512 || file.size>0x1C0000){
+   $('otaProgress').textContent='Недопустимый размер файла для OTA (макс. 1,75 МБ).';
+   return;
+ }
+ let expected=$('otaSha').value.trim();
+ if(expected && !/^[0-9a-f]{64}$/i.test(expected)){
+   $('otaProgress').textContent='SHA-256 должен состоять из 64 шестнадцатеричных символов.';
+   return;
+ }
+ if(!confirm('Обновить ТОЛЬКО шлюз '+$('webAddress').textContent+'? Устройство перезагрузится, настройки NVS сохранятся.')){
+   return;
+ }
+ uploadingOta=true;
+ $('otaUploadButton').disabled=true;
+ $('otaProgress').textContent='Загрузка файла на шлюз...';
+ const xhr=new XMLHttpRequest();
+ xhr.open('POST','/api/ota/gateway');
+ xhr.setRequestHeader('X-Automesh-Admin',token);
+ xhr.setRequestHeader('Content-Type','application/octet-stream');
+ if(expected)xhr.setRequestHeader('X-Image-SHA256',expected.toLowerCase());
+ xhr.upload.onprogress=ev=>{
+   if(ev.lengthComputable){
+     $('otaProgress').textContent='Отправка прошивки: '+Math.floor(100*ev.loaded/ev.total)+'%. Ожидайте проверки ESP32.';
+   }
+ };
+ xhr.onerror=()=>finish('Сеть потеряна во время передачи. Проверьте версию шлюза после подключения.');
+ xhr.ontimeout=()=>finish('Время ожидания превышено. Проверьте состояние шлюза.');
+ xhr.onload=()=>{
+   if(xhr.status===200){
+     $('otaProgress').textContent='Прошивка проверена и установлена в резервный раздел. Шлюз перезагружается — обновите страницу после восстановления Wi-Fi.';
+     uploadingOta=false;
+     $('otaUploadButton').disabled=false;
+     return;
+   }
+   if(xhr.status===401||xhr.status===429){
+     invalidateAuth('Ошибка авторизации при OTA: HTTP '+xhr.status);
+   }
+   finish('Шлюз отклонил прошивку (HTTP '+xhr.status+'): '+xhr.responseText.slice(0,180));
+ };
+ function finish(reason){
+   uploadingOta=false;
+   $('otaUploadButton').disabled=false;
+   $('otaProgress').textContent=reason;
+ }
+ try{xhr.timeout=120000;xhr.send(file);}
+ catch(err){finish('Ошибка отправки: '+err.message);}
+});
+
 $('wifiForm').addEventListener('submit',async e=>{
   e.preventDefault();
   const ssid=$('routerSsid').value;
@@ -425,6 +501,7 @@ bootstrapAdmin().then(update);setInterval(update,3000);
 </script>
 </body>
 </html>
+
 
 
 

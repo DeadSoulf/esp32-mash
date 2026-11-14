@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "esp_app_desc.h"
 #include "automesh_status_led.h"
+#include "automesh_gateway_node_ota.h"
 #include "cJSON.h"
 
 #define MAX_CANDIDATES 24
@@ -29,6 +30,7 @@ typedef struct {
     bool occupied;
     bool rejected;
     bool approved;
+    bool removing;
     uint16_t mesh_address;
     int64_t last_reply_us;
     char name[NODE_NAME_BYTES+1];
@@ -36,6 +38,8 @@ typedef struct {
 } candidate_t;
 static candidate_t candidates[MAX_CANDIDATES];
 static bool provisioner_ready;
+static bool removal_pending;
+static uint8_t removal_uuid[16];
 typedef struct {
     uint8_t uuid[16];
     uint16_t address;
@@ -312,7 +316,7 @@ bool automesh_node_ota_supported(uint16_t address, uint8_t chip)
     if (xSemaphoreTake(lock,pdMS_TO_TICKS(150))!=pdTRUE) return false;
     for (int i=0; i<MAX_CANDIDATES; ++i) {
         const candidate_t *c=&candidates[i];
-        if (!c->occupied || !c->approved || c->rejected ||
+        if (!c->occupied || !c->approved || c->rejected || c->removing ||
             c->mesh_address!=address ||
             !c->last_reply_us ||
             now-c->last_reply_us>=35000000LL) continue;
@@ -340,6 +344,81 @@ void automesh_note_reply(uint16_t mesh_address)
     }
     xSemaphoreGive(lock);
     if (found) automesh_led_mark_alive();
+}
+
+
+/* ESP-BLE-MESH provisioner node deletion is asynchronous. Only delete the
+ * gateway's metadata after ESP_BLE_MESH_PROVISIONER_DELETE_NODE_WITH_UUID_COMP_EVT
+ * confirms that the native provisioner database accepted the deletion.
+ * This does NOT reset the remote node or revoke the shared Mesh NetKey. */
+void automesh_remove_completed(const uint8_t uuid[16], esp_err_t result)
+{
+    if (!uuid || !lock || xSemaphoreTake(lock,pdMS_TO_TICKS(1000))!=pdTRUE)
+        return;
+    if (!removal_pending || memcmp(removal_uuid,uuid,16)!=0) {
+        xSemaphoreGive(lock);
+        return;
+    }
+    for (int i=0;i<MAX_CANDIDATES;i++) {
+        candidate_t *c=&candidates[i];
+        if (!c->occupied || memcmp(c->device.uuid,uuid,16)) continue;
+        if (result==ESP_OK) {
+            memset(c,0,sizeof(*c));
+            esp_err_t stored=registry_save_locked();
+            if (stored!=ESP_OK)
+                ESP_LOGE(TAG,"Failed to persist deleted Mesh node: %s",esp_err_to_name(stored));
+        } else {
+            c->removing=false;
+        }
+        break;
+    }
+    removal_pending=false;
+    memset(removal_uuid,0,sizeof(removal_uuid));
+    xSemaphoreGive(lock);
+}
+
+esp_err_t automesh_remove_uuid(const char *uuid_hex)
+{
+    uint8_t uuid[16];
+    if (!uuid_hex || !from_hex(uuid_hex,uuid,sizeof(uuid)) || !lock)
+        return ESP_ERR_INVALID_ARG;
+    if (automesh_gateway_node_ota_active()) return ESP_ERR_INVALID_STATE;
+
+    if (xSemaphoreTake(lock,pdMS_TO_TICKS(1000))!=pdTRUE)
+        return ESP_ERR_TIMEOUT;
+    if (removal_pending) {
+        xSemaphoreGive(lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    int slot=-1;
+    for(int i=0;i<MAX_CANDIDATES;i++) {
+        const candidate_t *c=&candidates[i];
+        if (c->occupied && c->approved && c->mesh_address &&
+            memcmp(c->device.uuid,uuid,sizeof(uuid))==0) {
+            slot=i;
+            break;
+        }
+    }
+    if(slot<0) {
+        xSemaphoreGive(lock);
+        return ESP_ERR_NOT_FOUND;
+    }
+    removal_pending=true;
+    memcpy(removal_uuid,uuid,sizeof(uuid));
+    candidates[slot].removing=true;
+    xSemaphoreGive(lock);
+
+    const bool native=provisioner_ready &&
+        esp_ble_mesh_provisioner_get_node_with_uuid(uuid)!=NULL;
+    if (!native) {
+        // A legacy UI-only record can be forgotten without touching SDK keys.
+        automesh_gateway_forget_node(uuid);
+        automesh_remove_completed(uuid,ESP_OK);
+        return ESP_OK;
+    }
+    esp_err_t err=esp_ble_mesh_provisioner_delete_node_with_uuid(uuid);
+    if(err!=ESP_OK) automesh_remove_completed(uuid,err);
+    return err;
 }
 
 esp_err_t automesh_deny_uuid(const char *uuid_hex)
@@ -413,7 +492,7 @@ int automesh_devices_json(char *out,size_t cap)
                    (now-c->last_reply_us < 35000000LL);
         bool configured=provisioner_ready && c->mesh_address &&
             esp_ble_mesh_provisioner_get_node_with_uuid(c->device.uuid)!=NULL;
-        const char *status=c->rejected?"denied":
+        const char *status=c->removing?"removing":c->rejected?"denied":
              c->mesh_address?(configured?(alive?"online":"offline"):"needs_repair"):
              c->approved?"provisioning":"pending";
         cJSON *item=cJSON_CreateObject();

@@ -547,6 +547,7 @@ static esp_err_t action_handler(httpd_req_t *req)
         cJSON *u=cJSON_GetObjectItemCaseSensitive(body,"uuid");
         if(cJSON_IsString(u) && u->valuestring) {
             if(strcmp(req->uri,"/api/deny")==0) result=automesh_deny_uuid(u->valuestring);
+            if(strcmp(req->uri,"/api/remove")==0) result=automesh_remove_uuid(u->valuestring);
             if(strcmp(req->uri,"/api/approve")==0) {
                 // Admin authentication already happened in authorize(req).
                 result=automesh_approve_uuid(u->valuestring);
@@ -637,6 +638,7 @@ esp_err_t automesh_web_start(void)
     httpd_uri_t status={.uri="/api/status",.method=HTTP_GET,.handler=status_handler};
     httpd_uri_t approve={.uri="/api/approve",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t deny={.uri="/api/deny",.method=HTTP_POST,.handler=action_handler};
+    httpd_uri_t remove={.uri="/api/remove",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t ping={.uri="/api/ping",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t locate={.uri="/api/locate",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t locate_status={.uri="/api/locate/status",.method=HTTP_GET,.handler=locate_status_handler};
@@ -657,6 +659,7 @@ esp_err_t automesh_web_start(void)
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&status);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&approve);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&deny);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&remove);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&ping);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&locate);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&locate_status);

@@ -103,7 +103,7 @@ small{color:#9eb4c8}
 <div class="wifi-search"><button id="scanMesh" type="button" class="secondary" disabled>Поиск новых устройств</button><span class="sub" id="meshScanStatus" role="status">Войдите в панель для поиска устройств.</span></div>
 <p class="sub">«Найти» запускает быстрое мигание выбранного узла на 15 секунд. Результат показывается после подтверждения устройства. Кнопка «Имя» сохраняет название, которое останется после перезагрузки.</p>
 <div style="overflow-x:auto"><table>
-<thead><tr><th>Устройство / UUID</th><th>Адрес Mesh</th><th>Состояние</th><th>Прошивка</th><th>Управление</th></tr></thead>
+<thead><tr><th>Устройство</th><th>Адрес Mesh</th><th>Состояние</th><th>Прошивка</th><th>Управление</th></tr></thead>
 <tbody id="devices"><tr><td colspan="5" class="sub">Введите ключ администратора</td></tr></tbody>
 </table></div>
 </section>
@@ -191,7 +191,7 @@ async function bootstrapAdmin(){
  }catch(e){$('connection').textContent='Нет связи со шлюзом';message('Ошибка загрузки: '+e.message);}
 }
 
-function uiState(s){return ({online:'В сети',offline:'Нет связи',needs_repair:'Нужна настройка Mesh',pending:'Ожидает подтверждения',denied:'Отклонено',provisioning:'Регистрация...'})[s]||'Неизвестно';}
+function uiState(s){return ({online:'В сети',offline:'Нет связи',needs_repair:'Нужна настройка Mesh',pending:'Ожидает подтверждения',denied:'Отклонено',provisioning:'Регистрация...',removing:'Удаление...'})[s]||'Неизвестно';}
 function badgeStyle(s){return s==='online'?'good':s==='offline'||s==='needs_repair'?'offline':s==='pending'?'warn':'';}
 function invalidateAuth(reason){
  token='';
@@ -273,7 +273,7 @@ async function update(){
    if(!n.address)continue;
    const v=n.firmware_version||'Версия неизвестна';
    const chip=v.includes(' C3 ')?'C3':v.includes(' S3 ')?'S3':'';
-   const item=new Option((n.name||n.uuid)+' · '+v,String(n.address));
+   const item=new Option((n.name||'ESP32 без имени')+' · '+v,String(n.address));
    item.disabled=!n.online || !chip || !v.includes(' OTA1 ');
    item.dataset.chip=chip;
    chooser.add(item);
@@ -290,8 +290,9 @@ async function update(){
    const name=row.insertCell();
    const title=document.createElement('strong');
    title.textContent=node.name||'ESP32 без имени';
-   const id=document.createElement('code');id.textContent=node.uuid;
-   name.append(title,document.createElement('br'),id);
+   // UUID remains an internal API identifier but is hidden from the UI.
+   // Show only the user-assigned name, not a 32-character technical ID.
+   name.append(title);
    const mesh=row.insertCell();mesh.textContent=node.address?'0x'+Number(node.address).toString(16).padStart(4,'0'):'—';
    const status=row.insertCell();const badge=document.createElement('span');badge.className='badge '+badgeStyle(node.state);badge.textContent=uiState(node.state);status.append(badge);
    const firmware=row.insertCell();
@@ -300,14 +301,30 @@ async function update(){
    firmware.className='sub';
    const actions=row.insertCell();const holder=document.createElement('div');holder.className='operations';actions.append(holder);
    function action(text,secondary,fn){const btn=document.createElement('button');btn.textContent=text;if(secondary)btn.className='secondary';btn.addEventListener('click',fn);holder.append(btn);}
-   if(node.state==='pending'){
+   if(node.state==='removing'){
+     const hint=document.createElement('small');
+     hint.textContent='Удаление из шлюза выполняется...';
+     holder.append(hint);
+   } else if(node.state==='pending'){
      action('Разрешить',false,async()=>{
        if(!confirm('Добавить эту ESP32 в Mesh? Проверьте, что это именно ваше устройство.'))return;
-       try{await api('/api/approve','POST',{uuid:node.uuid});message('Регистрация запрошена для '+node.uuid);await update();}
+       try{await api('/api/approve','POST',{uuid:node.uuid});message('Регистрация запрошена для '+(node.name||'ESP32 без имени'));await update();}
        catch(e){message('Ошибка регистрации: '+e.message);}
      });
      action('Отклонить',true,async()=>{if(!confirm('Отклонить эту ESP32?'))return;try{await api('/api/deny','POST',{uuid:node.uuid});await update();}catch(e){message(e.message);}});
    }else if(node.address){
+     action('Удалить устройство',true,async()=>{
+       const display=node.name||'ESP32 без имени';
+       if(!confirm('Удалить «'+display+'» из списка и базы шлюза?\n\n'+
+         'Это удалит регистрацию на ШЛЮЗЕ, но НЕ сбросит Mesh-ключи в самом узле. '+
+         'Чтобы полностью вывести ESP32 из сети или добавить повторно, потребуется '+
+         'сбросить Mesh на самом устройстве.'))return;
+       try{
+         await api('/api/remove','POST',{uuid:node.uuid});
+         message('Удаление «'+display+'» отправлено в Mesh. Проверяю результат...');
+         await update();
+       }catch(e){message('Ошибка удаления «'+display+'»: '+e.message);}
+     });
      action('Имя',true,async()=>{
        const proposed=prompt('Название устройства (до 48 байт):',node.name||'');
        if(proposed===null)return;
@@ -325,25 +342,25 @@ async function update(){
        action('Найти',false,async()=>{
          try{
            await api('/api/locate','POST',{address:node.address,seconds:15});
-           message('Настраиваю поиск для '+(node.name||node.uuid)+' и ожидаю подтверждения ESP32...');
+           message('Настраиваю поиск для '+(node.name||'ESP32 без имени')+' и ожидаю подтверждения ESP32...');
            for(let t=0;t<20;t++){
              await new Promise(resolve=>setTimeout(resolve,800));
              const result=await api('/api/locate/status');
              if(result.address!==node.address)continue;
              if(result.status==='confirmed'){
-               message('Найдено: '+(node.name||node.uuid)+'. Устройство подтвердило команду, светодиод должен быстро мигать 15 секунд.');
+               message('Найдено: '+(node.name||'ESP32 без имени')+'. Устройство подтвердило команду, светодиод должен быстро мигать 15 секунд.');
                return;
              }
              if(result.status==='timeout'){
-               message('Нет ответа от '+(node.name||node.uuid)+'. Проверь питание, связь и привязку модели Mesh.');
+               message('Нет ответа от '+(node.name||'ESP32 без имени')+'. Проверь питание, связь и привязку модели Mesh.');
                return;
              }
              if(result.status==='failed'){
-               message('Не удалось настроить поиск для '+(node.name||node.uuid)+'. Проверь журнал шлюза и версию прошивки узла.');
+               message('Не удалось настроить поиск для '+(node.name||'ESP32 без имени')+'. Проверь журнал шлюза и версию прошивки узла.');
                return;
              }
            }
-           message('Время ожидания подтверждения истекло для '+(node.name||node.uuid));
+           message('Время ожидания подтверждения истекло для '+(node.name||'ESP32 без имени'));
          }catch(e){message('Ошибка команды «Найти»: '+e.message);}
        });
        action('Проверить связь',true,async()=>{try{await api('/api/ping','POST',{address:node.address});message('Контрольный запрос отправлен.');}catch(e){message(e.message);}});

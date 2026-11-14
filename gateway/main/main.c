@@ -74,6 +74,17 @@ static void automesh_store_nodes(void)
     nvs_close(h);
     if(err!=ESP_OK)ESP_LOGE(TAG,"Could not persist Mesh nodes: %s",esp_err_to_name(err));
 }
+void automesh_gateway_forget_node(const uint8_t uuid[16])
+{
+    if (!uuid) return;
+    for (int i=0;i<ARRAY_SIZE(nodes);++i) {
+        if (nodes[i].elem_num && memcmp(nodes[i].uuid,uuid,16)==0)
+            memset(&nodes[i],0,sizeof(nodes[i]));
+    }
+    // Also update the legacy mirror to prevent UI-only ghost nodes on restart.
+    automesh_store_nodes();
+}
+
 static void automesh_restore_nodes(void)
 {
     // The ESP-IDF Provisioner node table is authoritative: unlike the old
@@ -408,6 +419,16 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
         automesh_provisioned(param->provisioner_prov_complete.device_uuid,
                              param->provisioner_prov_complete.unicast_addr);
         break;
+    case ESP_BLE_MESH_PROVISIONER_DELETE_NODE_WITH_UUID_COMP_EVT: {
+        const uint8_t *uuid=param->provisioner_delete_node_with_uuid_comp.uuid;
+        esp_err_t result=param->provisioner_delete_node_with_uuid_comp.err_code;
+        if(result==ESP_OK)
+            automesh_gateway_forget_node(uuid);
+        else
+            ESP_LOGE(TAG,"Mesh node deletion failed: %s",esp_err_to_name(result));
+        automesh_remove_completed(uuid,result);
+        break;
+    }
     case ESP_BLE_MESH_PROVISIONER_ADD_UNPROV_DEV_COMP_EVT:
         ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_ADD_UNPROV_DEV_COMP_EVT, err_code %d", param->provisioner_add_unprov_dev_comp.err_code);
         break;

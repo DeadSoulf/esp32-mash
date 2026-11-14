@@ -21,6 +21,12 @@ void automesh_note_version(uint16_t mesh_address, const uint8_t *data, size_t le
 bool automesh_node_ota_supported(uint16_t address, uint8_t chip);
 esp_err_t automesh_approve_uuid(const char *uuid_hex);
 esp_err_t automesh_deny_uuid(const char *uuid_hex);
+/* Remove an approved node from the provisioner's SDK database and gateway
+ * registry. Does NOT remotely reset its NVS/NetKey. */
+esp_err_t automesh_remove_uuid(const char *uuid_hex);
+void automesh_remove_completed(const uint8_t uuid[16], esp_err_t result);
+/* Purge legacy RAM/NVS cache only after the SDK delete succeeds. */
+void automesh_gateway_forget_node(const uint8_t uuid[16]);
 int automesh_devices_json(char *out,size_t capacity);
 esp_err_t automesh_set_name(const char *uuid_hex,const char *name);
 esp_err_t automesh_load_appkey(uint8_t key[16]);

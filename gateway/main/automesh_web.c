@@ -245,7 +245,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     if(!authorize(req))return ESP_OK;
     cJSON *doc=cJSON_CreateObject();
     if(!doc)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
-    cJSON_AddStringToObject(doc,"version","0.3.4-dev");
+    cJSON_AddStringToObject(doc,"version","0.3.5-dev");
     cJSON_AddStringToObject(doc,"ssid",setup_mode?ap_ssid:sta_ssid);
     cJSON_AddStringToObject(doc,"ip",ip_string);
     cJSON_AddStringToObject(doc,"mode",setup_mode?"setup_ap":"sta");
@@ -399,9 +399,8 @@ static esp_err_t action_handler(httpd_req_t *req)
         if(cJSON_IsString(u) && u->valuestring) {
             if(strcmp(req->uri,"/api/deny")==0) result=automesh_deny_uuid(u->valuestring);
             if(strcmp(req->uri,"/api/approve")==0) {
-                cJSON *o=cJSON_GetObjectItemCaseSensitive(body,"oob");
-                if(cJSON_IsString(o) && o->valuestring)
-                    result=automesh_approve_uuid(u->valuestring,o->valuestring);
+                // Admin authentication already happened in authorize(req).
+                result=automesh_approve_uuid(u->valuestring);
             }
         }
     }
@@ -527,6 +526,7 @@ esp_err_t automesh_web_start(void)
     }
     return ESP_OK;
 }
+
 
 
 

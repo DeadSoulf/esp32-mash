@@ -27,7 +27,7 @@ MAX_APP_BYTES = 0x1C0000
 
 
 def stage(artifacts: Path, target: Path) -> dict:
-    manifest = {"schema": 2, "version": "0.3.4-dev", "profiles": {}}
+    manifest = {"schema": 2, "version": "0.3.5-dev", "profiles": {}}
     for chip, full_chip, description, led_profile in CHIPS:
         key = f"{chip}-generic-4mb" if chip == "esp32s3" else f"{chip}-supermini-4mb"
         profile = {
@@ -70,4 +70,5 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=Path, required=True)
     ns = parser.parse_args()
     stage(ns.artifacts, ns.out)
+
 

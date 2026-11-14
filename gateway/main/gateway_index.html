@@ -235,10 +235,8 @@ async function update(){
    function action(text,secondary,fn){const btn=document.createElement('button');btn.textContent=text;if(secondary)btn.className='secondary';btn.addEventListener('click',fn);holder.append(btn);}
    if(node.state==='pending'){
      action('Разрешить',false,async()=>{
-       const oob=prompt('OOB-ключ этой ESP32 (32 шестнадцатеричных символа):');
-       if(oob===null)return;
-       if(!/^[0-9a-fA-F]{32}$/.test(oob)){message('Неправильный OOB-ключ');return;}
-       try{await api('/api/approve','POST',{uuid:node.uuid,oob:oob.toLowerCase()});message('Регистрация запрошена для '+node.uuid);await update();}
+       if(!confirm('Добавить эту ESP32 в Mesh? Проверьте, что это именно ваше устройство.'))return;
+       try{await api('/api/approve','POST',{uuid:node.uuid});message('Регистрация запрошена для '+node.uuid);await update();}
        catch(e){message('Ошибка регистрации: '+e.message);}
      });
      action('Отклонить',true,async()=>{if(!confirm('Отклонить эту ESP32?'))return;try{await api('/api/deny','POST',{uuid:node.uuid});await update();}catch(e){message(e.message);}});
@@ -427,6 +425,7 @@ bootstrapAdmin().then(update);setInterval(update,3000);
 </script>
 </body>
 </html>
+
 
 
 

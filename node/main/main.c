@@ -116,42 +116,15 @@ static esp_ble_mesh_comp_t composition = {
     .elements = elements,
 };
 
-/* Individually generated 128-bit static OOB, persistent per board. */
-static uint8_t automesh_oob[16];
-
-static esp_err_t automesh_prepare_oob(void)
-{
-    nvs_handle_t h;
-    esp_err_t err = nvs_open("automesh", NVS_READWRITE, &h);
-    if (err != ESP_OK) return err;
-    size_t len = sizeof(automesh_oob);
-    err = nvs_get_blob(h, "oob_key", automesh_oob, &len);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        esp_fill_random(automesh_oob, sizeof(automesh_oob));
-        err = nvs_set_blob(h, "oob_key", automesh_oob, sizeof(automesh_oob));
-        if (err == ESP_OK) err = nvs_commit(h);
-    }
-    nvs_close(h);
-    if (err == ESP_OK) {
-        // Physical USB serial access is required to read this local pairing key.
-        static const char hex[] = "0123456789abcdef";
-        char str[33];
-        for (size_t i = 0; i < sizeof(automesh_oob); ++i) {
-            str[2 * i] = hex[automesh_oob[i] >> 4];
-            str[2 * i + 1] = hex[automesh_oob[i] & 0xf];
-        }
-        str[32] = 0;
-        printf("AUTOMESH_NODE_OOB %s\n", str);
-        fflush(stdout);
-    }
-    return err;
-}
-
-/* OOB security is mandatory for AutoMesh. */
+/* Pairing is initiated only by an authenticated gateway administrator.
+ * Bluetooth Mesh uses No OOB provisioning: no second device code or key is
+ * requested. This does not authenticate physical device identity against an
+ * active radio attacker; use only in trusted commissioning conditions.
+ */
 static esp_ble_mesh_prov_t provision = {
     .uuid = dev_uuid,
-    .static_val = automesh_oob,
-    .static_val_len = sizeof(automesh_oob),
+    .static_val = NULL,
+    .static_val_len = 0,
     .output_size = 0,
     .output_actions = 0,
 };
@@ -425,7 +398,6 @@ void app_main(void)
         return;
     }
 
-    ESP_ERROR_CHECK(automesh_prepare_oob());
     ble_mesh_get_dev_uuid(dev_uuid);
 
     /* Initialize the Bluetooth Mesh Subsystem */
@@ -437,5 +409,6 @@ void app_main(void)
     automesh_led_set_registered(esp_ble_mesh_node_is_provisioned());
     automesh_mark_boot_healthy();
 }
+
 
 

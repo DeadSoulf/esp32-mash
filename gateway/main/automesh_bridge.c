@@ -310,11 +310,10 @@ esp_err_t automesh_deny_uuid(const char *uuid_hex)
     return ret;
 }
 
-esp_err_t automesh_approve_uuid(const char *uuid_hex, const char *oob_hex)
+esp_err_t automesh_approve_uuid(const char *uuid_hex)
 {
-    uint8_t uuid[16],oob[16];
-    if (!uuid_hex || !oob_hex || !from_hex(uuid_hex,uuid,16) ||
-        !from_hex(oob_hex,oob,16)) return ESP_ERR_INVALID_ARG;
+    uint8_t uuid[16];
+    if (!uuid_hex || !from_hex(uuid_hex,uuid,16)) return ESP_ERR_INVALID_ARG;
     if (xSemaphoreTake(lock,pdMS_TO_TICKS(1000)) != pdTRUE) return ESP_ERR_TIMEOUT;
     esp_ble_mesh_unprov_dev_add_t device={0};
     int index=-1;
@@ -322,7 +321,6 @@ esp_err_t automesh_approve_uuid(const char *uuid_hex, const char *oob_hex)
         if (candidates[i].occupied && candidates[i].approved &&
             candidates[i].mesh_address == 0) {
             xSemaphoreGive(lock);
-            memset(oob,0,sizeof(oob));
             return ESP_ERR_INVALID_STATE; // one pending provisioning at a time
         }
         if (candidates[i].occupied && !memcmp(candidates[i].device.uuid,uuid,16) &&
@@ -333,15 +331,12 @@ esp_err_t automesh_approve_uuid(const char *uuid_hex, const char *oob_hex)
     }
     if(index < 0) {
         xSemaphoreGive(lock);
-        memset(oob,0,sizeof(oob));
         return ESP_ERR_NOT_FOUND;
     }
     candidates[index].approved=true;
     xSemaphoreGive(lock);
 
-    esp_err_t err=esp_ble_mesh_provisioner_set_static_oob_value(oob,16);
-    memset(oob,0,sizeof(oob));
-    if(err == ESP_OK) err=esp_ble_mesh_provisioner_add_unprov_dev(&device,
+    esp_err_t err=esp_ble_mesh_provisioner_add_unprov_dev(&device,
        (esp_ble_mesh_dev_add_flag_t)(ADD_DEV_RM_AFTER_PROV_FLAG |
         ADD_DEV_START_PROV_NOW_FLAG | ADD_DEV_FLUSHABLE_DEV_FLAG));
     if(err != ESP_OK && xSemaphoreTake(lock,pdMS_TO_TICKS(1000))==pdTRUE) {
@@ -412,8 +407,9 @@ static void list_candidates(void)
 
 static void command_task(void *arg)
 {
+    (void)arg;
     char line[160];
-    printf("AUTOMESH {\"event\":\"ready\",\"version\":\"0.1.0\"}\n");
+    printf("AUTOMESH {\"event\":\"ready\",\"version\":\"0.3.5-dev\"}\n");
     fflush(stdout);
     while (true) {
         if (!fgets(line, sizeof(line), stdin)) {
@@ -421,63 +417,34 @@ static void command_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
-        char verb[16] = {0}, uuid_text[40] = {0}, oob_text[40] = {0};
-        int count = sscanf(line, "%15s %39s %39s", verb, uuid_text, oob_text);
-        if (count == 1 && strcmp(verb, "LIST") == 0) {
+        char verb[16]={0}, uuid_text[40]={0};
+        int count=sscanf(line,"%15s %39s",verb,uuid_text);
+        if(count==1 && strcmp(verb,"LIST")==0) {
             list_candidates();
             continue;
         }
-        if (count == 1 && strcmp(verb, "HELLO") == 0) {
-            printf("AUTOMESH {\"event\":\"ready\",\"version\":\"0.1.0\"}\n");
+        if(count==1 && strcmp(verb,"HELLO")==0) {
+            printf("AUTOMESH {\"event\":\"ready\",\"version\":\"0.3.5-dev\"}\n");
             fflush(stdout);
             continue;
         }
-        uint8_t uuid[16], oob[16];
-        if (count < 2 || !from_hex(uuid_text, uuid, 16)) {
-            ESP_LOGW(TAG, "Invalid command");
+        uint8_t uuid[16];
+        if(count!=2 || !from_hex(uuid_text,uuid,sizeof(uuid))) {
+            ESP_LOGW(TAG,"Invalid USB command");
             continue;
         }
-        if (xSemaphoreTake(lock, portMAX_DELAY) != pdTRUE) continue;
-        int idx = -1;
-        for (int i = 0; i < MAX_CANDIDATES; ++i)
-            if (candidates[i].occupied && !memcmp(candidates[i].device.uuid, uuid, 16)) { idx = i; break; }
-        esp_ble_mesh_unprov_dev_add_t device = {0};
-        bool approved = false;
-        if (idx >= 0) {
-            if (strcmp(verb, "DENY") == 0) candidates[idx].rejected = true;
-            if (strcmp(verb, "APPROVE") == 0 && !candidates[idx].approved && !candidates[idx].rejected) {
-                device = candidates[idx].device;
-                approved = true;
-            }
+        esp_err_t e=ESP_ERR_INVALID_ARG;
+        if(strcmp(verb,"APPROVE")==0) {
+            e=automesh_approve_uuid(uuid_text);
+        } else if(strcmp(verb,"DENY")==0) {
+            e=automesh_deny_uuid(uuid_text);
         }
-        xSemaphoreGive(lock);
-        char u[33];
-        hex_bytes(uuid, 16, u);
-        if (idx < 0) {
-            printf("AUTOMESH {\"event\":\"error\",\"uuid\":\"%s\",\"reason\":\"not_found\"}\n", u);
-        } else if (strcmp(verb, "DENY") == 0) {
-            printf("AUTOMESH {\"event\":\"denied\",\"uuid\":\"%s\"}\n", u);
-        } else if (strcmp(verb, "APPROVE") == 0 && approved && count == 3 &&
-                   from_hex(oob_text, oob, sizeof(oob))) {
-            // An OOB value must also be preconfigured on the physical node.
-            esp_err_t err = esp_ble_mesh_provisioner_set_static_oob_value(oob, sizeof(oob));
-            memset(oob, 0, sizeof(oob));
-            if (err == ESP_OK) {
-                err = esp_ble_mesh_provisioner_add_unprov_dev(&device,
-                    (esp_ble_mesh_dev_add_flag_t)(ADD_DEV_RM_AFTER_PROV_FLAG |
-                    ADD_DEV_START_PROV_NOW_FLAG | ADD_DEV_FLUSHABLE_DEV_FLAG));
-            }
-            if (err == ESP_OK) {
-                if (xSemaphoreTake(lock, portMAX_DELAY) == pdTRUE) {
-                    if (idx >= 0) candidates[idx].approved = true;
-                    xSemaphoreGive(lock);
-                }
-                printf("AUTOMESH {\"event\":\"approval_started\",\"uuid\":\"%s\"}\n", u);
-            } else {
-                printf("AUTOMESH {\"event\":\"error\",\"uuid\":\"%s\",\"reason\":\"mesh_error\"}\n", u);
-            }
+        if(e==ESP_OK) {
+            printf("AUTOMESH {\"event\":\"%s\",\"uuid\":\"%s\"}\n",
+                   strcmp(verb,"APPROVE")==0?"approval_started":"denied",uuid_text);
         } else {
-            printf("AUTOMESH {\"event\":\"error\",\"uuid\":\"%s\",\"reason\":\"approval_needs_16_byte_oob\"}\n", u);
+            printf("AUTOMESH {\"event\":\"error\",\"uuid\":\"%s\",\"reason\":\"%s\"}\n",
+                   uuid_text,esp_err_to_name(e));
         }
         fflush(stdout);
     }
@@ -488,5 +455,6 @@ void automesh_bridge_start(void)
     BaseType_t ok = xTaskCreate(command_task, "automesh_usb", 4096, NULL, 5, NULL);
     if (ok != pdPASS) ESP_LOGE(TAG, "USB command task creation failed");
 }
+
 
 

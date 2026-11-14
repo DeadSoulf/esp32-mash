@@ -1,4 +1,5 @@
 #include "automesh_gateway_node_ota.h"
+#include "automesh_locate.h"
 #include "automesh_ota_protocol.h"
 #include "automesh_bridge.h"
 #include <string.h>

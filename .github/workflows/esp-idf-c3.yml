@@ -6,6 +6,8 @@ on:
     paths:
       - 'gateway/**'
       - 'node/**'
+      - 'tests/**'
+      - 'Windows-Installer/**'
       - '.github/workflows/esp-idf-c3.yml'
   workflow_dispatch:
 

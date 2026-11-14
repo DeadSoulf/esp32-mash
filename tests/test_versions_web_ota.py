@@ -48,7 +48,7 @@ class FirmwareVersionsAndWebOta(unittest.TestCase):
         self.assertIn("_release/Web-OTA/Nodes/node-esp32s3-zero-onoff_server.bin", ci)
         self.assertIn("_release/Web-OTA/SHA256SUMS.txt", ci)
         self.assertIn("WEB-OTA-README-RU.txt", ci)
-        self.assertIn("Обновление УЗЛА", read("Windows-Installer/WEB-OTA-README-RU.txt"))
+        self.assertIn("ОБНОВЛЕНИЕ УЗЛА", read("Windows-Installer/WEB-OTA-README-RU.txt"))
 
 if __name__ == "__main__":
     unittest.main()

@@ -53,7 +53,8 @@ class FirstBootAdminTests(unittest.TestCase):
             self.assertIn(expected, HTML)
         self.assertIn("automesh_admin.c", CMAKE)
         self.assertIn(" mbedtls ", CMAKE)
-        self.assertIn("esp_driver_rmt)", CMAKE)
+        self.assertIn("esp_driver_rmt ", CMAKE)
+        self.assertIn("esp_app_format)", CMAKE)
 
 
 if __name__ == "__main__":

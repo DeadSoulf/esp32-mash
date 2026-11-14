@@ -2,6 +2,8 @@
 from pathlib import Path
 import importlib.util
 import io
+import sys
+import types
 from contextlib import redirect_stdout
 from unittest.mock import patch
 import unittest
@@ -26,7 +28,20 @@ class USBInstallerTests(unittest.TestCase):
         # imported, never used to access USB in these unit tests.
         spec=importlib.util.spec_from_file_location("automesh_usb_installer",INSTALLER)
         cls.installer=importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.installer)
+        fake_esptool=types.ModuleType("esptool")
+        fake_serial=types.ModuleType("serial")
+        fake_tools=types.ModuleType("serial.tools")
+        fake_list_ports=types.ModuleType("serial.tools.list_ports")
+        fake_tools.list_ports=fake_list_ports
+        fake_serial.tools=fake_tools
+        # Tests exercise choice and validation only: no COM access needed.
+        with patch.dict(sys.modules,{
+            "esptool":fake_esptool,
+            "serial":fake_serial,
+            "serial.tools":fake_tools,
+            "serial.tools.list_ports":fake_list_ports,
+        }):
+            spec.loader.exec_module(cls.installer)
 
     def test_controller_selection_never_defaults_even_if_only_one(self):
         with patch("builtins.input",return_value="0"):

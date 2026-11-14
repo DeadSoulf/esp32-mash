@@ -102,13 +102,13 @@ jobs:
           Copy-Item _artifacts/automesh-gateway-esp32c3/provisioner.bin _release/gateway-esp32c3-provisioner.bin
           Copy-Item _artifacts/automesh-gateway-esp32s3/provisioner.bin _release/gateway-esp32s3-provisioner.bin
           Copy-Item Windows-Installer/THIRD-PARTY-LICENSES _release/THIRD-PARTY-LICENSES -Recurse
-          Compress-Archive -Path _release/* -DestinationPath AutoMesh-Windows-Installer-v0.3.6-dev.zip -CompressionLevel Optimal -Force
-          Get-FileHash AutoMesh-Windows-Installer-v0.3.6-dev.zip -Algorithm SHA256 | Format-List
+          Compress-Archive -Path _release/* -DestinationPath AutoMesh-Windows-Installer-v0.3.7-dev.zip -CompressionLevel Optimal -Force
+          Get-FileHash AutoMesh-Windows-Installer-v0.3.7-dev.zip -Algorithm SHA256 | Format-List
       - name: Upload portable installer archive as CI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: automesh-installer-windows-v0.3.6-dev
-          path: AutoMesh-Windows-Installer-v0.3.6-dev.zip
+          name: automesh-installer-windows-v0.3.7-dev
+          path: AutoMesh-Windows-Installer-v0.3.7-dev.zip
           retention-days: 14
           if-no-files-found: error
       - name: Publish pre-release for Windows downloads
@@ -117,12 +117,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "v0.3.6-dev" --repo "${{ github.repository }}" 2>$null
+          gh release view "v0.3.7-dev" --repo "${{ github.repository }}" 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "v0.3.6-dev" --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" --title "ESP32 AutoMesh v0.3.6-dev (C3 + S3)" --notes "Windows initial USB installer: ESP32-C3 and ESP32-S3, 4MB Flash, gateway/node firmware. Verify exact board pinout, create full Flash backup before first write. ESP32-S3 generic LED is disabled until board GPIO/type is verified."
+            gh release create "v0.3.7-dev" --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" --title "ESP32 AutoMesh v0.3.7-dev (C3 + S3)" --notes "Windows initial USB installer: ESP32-C3 and ESP32-S3, 4MB Flash, gateway/node firmware. Verify exact board pinout, create full Flash backup before first write. ESP32-S3 generic LED is disabled until board GPIO/type is verified."
             if ($LASTEXITCODE -ne 0) { throw "Release creation failed" }
           }
-          gh release upload "v0.3.6-dev" "AutoMesh-Windows-Installer-v0.3.6-dev.zip" --clobber --repo "${{ github.repository }}"
+          gh release upload "v0.3.7-dev" "AutoMesh-Windows-Installer-v0.3.7-dev.zip" --clobber --repo "${{ github.repository }}"
           if ($LASTEXITCODE -ne 0) { throw "Release upload failed" }
 
 

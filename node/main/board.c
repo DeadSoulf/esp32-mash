@@ -23,7 +23,7 @@ struct _led_state led_state[3] = {
 
 void board_led_operation(uint8_t pin, uint8_t onoff)
 {
-#if CONFIG_IDF_TARGET_ESP32C3
+#if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32S3
     // GPIO8 is reserved for network-status LED; don't let OnOff commands override it.
     (void)pin; (void)onoff;
     return;
@@ -57,7 +57,7 @@ static void board_led_init(void)
 
 void board_init(void)
 {
-#if !CONFIG_IDF_TARGET_ESP32C3
+#if !CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S3
     board_led_init();
 #endif
 }

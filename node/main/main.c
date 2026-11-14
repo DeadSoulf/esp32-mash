@@ -398,6 +398,22 @@ void app_main(void)
         return;
     }
 
+    // Remove only the obsolete legacy static-OOB key.  Preserve all Mesh
+    // provisioning data, keys, device address and other NVS namespaces.
+    nvs_handle_t legacy_nvs;
+    esp_err_t old_oob = nvs_open("automesh", NVS_READWRITE, &legacy_nvs);
+    if (old_oob == ESP_OK) {
+        old_oob = nvs_erase_key(legacy_nvs, "oob_key");
+        if (old_oob == ESP_OK) {
+            old_oob = nvs_commit(legacy_nvs);
+            if (old_oob != ESP_OK)
+                ESP_LOGW(TAG, "Legacy OOB cleanup commit failed: %s", esp_err_to_name(old_oob));
+        } else if (old_oob != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Legacy OOB cleanup failed: %s", esp_err_to_name(old_oob));
+        }
+        nvs_close(legacy_nvs);
+    }
+
     ble_mesh_get_dev_uuid(dev_uuid);
 
     /* Initialize the Bluetooth Mesh Subsystem */

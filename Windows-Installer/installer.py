@@ -90,6 +90,8 @@ def identify(port: str) -> dict | None:
 
 def read_manifest() -> dict:
     path = RELEASE_DIR / "manifest.json"
+    if not path.is_file():
+        raise RuntimeError("Неполный пакет: отсутствует manifest.json. Установите полный ZIP из GitHub Releases, а не исходники. Запись Flash не начиналась.")
     data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("schema") != 2 or not isinstance(data.get("profiles"), dict):
         raise RuntimeError("Неизвестный формат manifest.json")
@@ -266,6 +268,10 @@ def main() -> int:
             raise RuntimeError("Пакет неполный: отсутствуют образы шлюза/узла для C3 или S3")
         line(f"Самопроверка выполнена: {count} совместимых комплектов")
         return 0
+    # A missing release manifest must be rejected before accessing a COM port.
+    manifest = read_manifest()
+    if not manifest["profiles"]:
+        raise RuntimeError("Неполный пакет: manifest.json не содержит профилей прошивок.")
     line("Поиск USB-устройств ESP32...")
     found = []
     for port in discover_ports() if args.port is None else [args.port]:

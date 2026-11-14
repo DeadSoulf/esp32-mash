@@ -12,6 +12,7 @@
 #include "esp_random.h"
 #include "esp_ble_mesh_defs.h"
 #include "esp_ble_mesh_provisioning_api.h"
+#include "esp_ble_mesh_networking_api.h"
 #include "nvs.h"
 #include "esp_timer.h"
 #include "automesh_status_led.h"

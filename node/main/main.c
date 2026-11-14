@@ -410,12 +410,14 @@ void app_main(void)
     board_init();
     automesh_led_start();
 
-    err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
+    err=nvs_flash_init();
+    if(err!=ESP_OK) {
+        // Never silently destroy Wi-Fi credentials or Mesh keys on a
+        // storage error. An explicit, backed-up recovery is required.
+        ESP_LOGE(TAG,"NVS init failed: %s. No automatic erase performed.",
+                 esp_err_to_name(err));
+        return;
     }
-    ESP_ERROR_CHECK(err);
 
     err = bluetooth_init();
     if (err) {
@@ -435,4 +437,5 @@ void app_main(void)
     automesh_led_set_registered(esp_ble_mesh_node_is_provisioned());
     automesh_mark_boot_healthy();
 }
+
 

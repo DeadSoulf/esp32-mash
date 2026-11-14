@@ -43,6 +43,7 @@ extern const char gateway_index_html_start[] asm("_binary_gateway_index_html_sta
 extern const char gateway_index_html_end[] asm("_binary_gateway_index_html_end");
 extern esp_err_t automesh_gateway_ping(uint16_t address);
 extern esp_err_t automesh_gateway_locate(uint16_t address,uint8_t seconds);
+extern int automesh_gateway_locate_status_json(char *out,size_t capacity);
 
 static esp_err_t secret_get_or_make(nvs_handle_t h,const char *key,char *out,size_t length,bool hex)
 {
@@ -231,12 +232,21 @@ static esp_err_t list_handler(httpd_req_t *req)
     free(buf);
     return e;
 }
+static esp_err_t locate_status_handler(httpd_req_t *req)
+{
+    if(!authorize(req))return ESP_OK;
+    char body[192]={0};
+    int n=automesh_gateway_locate_status_json(body,sizeof(body));
+    if(n<=0 || n>=(int)sizeof(body))
+        return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Locate status unavailable");
+    return json_reply(req,"200 OK",body);
+}
 static esp_err_t status_handler(httpd_req_t *req)
 {
     if(!authorize(req))return ESP_OK;
     cJSON *doc=cJSON_CreateObject();
     if(!doc)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
-    cJSON_AddStringToObject(doc,"version","0.3.0-dev");
+    cJSON_AddStringToObject(doc,"version","0.3.2-dev");
     cJSON_AddStringToObject(doc,"ssid",setup_mode?ap_ssid:sta_ssid);
     cJSON_AddStringToObject(doc,"ip",ip_string);
     cJSON_AddStringToObject(doc,"mode",setup_mode?"setup_ap":"sta");
@@ -327,7 +337,12 @@ static esp_err_t action_handler(httpd_req_t *req)
     cJSON *body=read_post_json(req);
     if(!body)return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Invalid JSON");
     esp_err_t result=ESP_ERR_INVALID_ARG;
-    if(strcmp(req->uri,"/api/locate")==0) {
+    if(strcmp(req->uri,"/api/name")==0) {
+        cJSON *u=cJSON_GetObjectItemCaseSensitive(body,"uuid");
+        cJSON *n=cJSON_GetObjectItemCaseSensitive(body,"name");
+        if(cJSON_IsString(u) && cJSON_IsString(n) && u->valuestring && n->valuestring)
+            result=automesh_set_name(u->valuestring,n->valuestring);
+    } else if(strcmp(req->uri,"/api/locate")==0) {
         cJSON *a=cJSON_GetObjectItemCaseSensitive(body,"address");
         cJSON *n=cJSON_GetObjectItemCaseSensitive(body,"seconds");
         if(cJSON_IsNumber(a) && a->valuedouble==(double)a->valueint &&
@@ -416,7 +431,7 @@ esp_err_t automesh_web_start(void)
     e=automesh_wifi_scan_init();
     if(e!=ESP_OK)return e;
     httpd_config_t hc=HTTPD_DEFAULT_CONFIG();
-    hc.max_uri_handlers=12;
+    hc.max_uri_handlers=14;
     hc.stack_size=6144;
     hc.lru_purge_enable=true;
     e=httpd_start(&server,&hc);
@@ -429,6 +444,8 @@ esp_err_t automesh_web_start(void)
     httpd_uri_t deny={.uri="/api/deny",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t ping={.uri="/api/ping",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t locate={.uri="/api/locate",.method=HTTP_POST,.handler=action_handler};
+    httpd_uri_t locate_status={.uri="/api/locate/status",.method=HTTP_GET,.handler=locate_status_handler};
+    httpd_uri_t name={.uri="/api/name",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t wifi={.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_setup_handler};
     httpd_uri_t wifi_scan={.uri="/api/wifi/scan",.method=HTTP_POST,.handler=wifi_scan_begin_handler};
     httpd_uri_t wifi_list={.uri="/api/wifi/networks",.method=HTTP_GET,.handler=wifi_scan_status_handler};
@@ -439,6 +456,8 @@ esp_err_t automesh_web_start(void)
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&deny);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&ping);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&locate);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&locate_status);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&name);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi_scan);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi_list);
@@ -459,4 +478,5 @@ esp_err_t automesh_web_start(void)
     }
     return ESP_OK;
 }
+
 

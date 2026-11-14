@@ -15,6 +15,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
+#include "esp_timer.h"
 
 #include "esp_ble_mesh_defs.h"
 #include "esp_ble_mesh_common_api.h"
@@ -73,29 +74,44 @@ static void automesh_store_nodes(void)
 }
 static void automesh_restore_nodes(void)
 {
-    nvs_handle_t h;
-    if(nvs_open("meshdb",NVS_READONLY,&h)!=ESP_OK)return;
-    size_t len=sizeof(nodes);
-    esp_err_t err=nvs_get_blob(h,"nodes",nodes,&len);
-    nvs_close(h);
-    if(err!=ESP_OK || len!=sizeof(nodes)) {
-        memset(nodes,0,sizeof(nodes));
-        return;
-    }
-    int loaded=0;
-    for(int i=0;i<ARRAY_SIZE(nodes);++i) {
-        if(nodes[i].elem_num==0 || !ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast) ||
-           !esp_ble_mesh_provisioner_get_node_with_addr(nodes[i].unicast)) {
-            memset(&nodes[i],0,sizeof(nodes[i]));
-            continue;
+    // The ESP-IDF Provisioner node table is authoritative: unlike the old
+    // application RAM array, the SDK persists this table with Mesh keys.
+    memset(nodes,0,sizeof(nodes));
+    int recovered=0;
+    const esp_ble_mesh_node_t **table=esp_ble_mesh_provisioner_get_node_table_entry();
+    if(table) {
+        for(int i=0;i<CONFIG_BLE_MESH_MAX_PROV_NODES;i++) {
+            const esp_ble_mesh_node_t *item=table[i];
+            if(!item || !ESP_BLE_MESH_ADDR_IS_UNICAST(item->unicast_addr) ||
+               item->element_num==0 || recovered>=ARRAY_SIZE(nodes))continue;
+            esp_ble_mesh_node_info_t *entry=&nodes[recovered++];
+            memcpy(entry->uuid,item->dev_uuid,16);
+            entry->unicast=item->unicast_addr;
+            entry->elem_num=item->element_num;
+            automesh_bridge_restore(item->dev_uuid,item->unicast_addr);
         }
-        automesh_bridge_restore(nodes[i].uuid,nodes[i].unicast);
-        loaded++;
     }
-    ESP_LOGI(TAG,"Restored %d trusted Mesh nodes from NVS",loaded);
+    // A migration fallback only exposes the old registry as offline. It does
+    // NOT assume missing SDK Mesh keys are restored and never sends messages
+    // to an address without a corresponding native provisioned node.
+    if(recovered==0) {
+        nvs_handle_t h;
+        if(nvs_open("meshdb",NVS_READONLY,&h)==ESP_OK) {
+            esp_ble_mesh_node_info_t previous[CONFIG_BLE_MESH_MAX_PROV_NODES]={0};
+            size_t len=sizeof(previous);
+            if(nvs_get_blob(h,"nodes",previous,&len)==ESP_OK &&
+               len==sizeof(previous)) {
+                for(int i=0;i<ARRAY_SIZE(previous);i++) {
+                    if(previous[i].elem_num && ESP_BLE_MESH_ADDR_IS_UNICAST(previous[i].unicast))
+                        automesh_bridge_restore(previous[i].uuid,previous[i].unicast);
+                }
+            }
+            nvs_close(h);
+        }
+    }
+    automesh_bridge_mesh_ready();
+    ESP_LOGI(TAG,"Native provisioner database: %d registered nodes",recovered);
 }
-
-
 static struct esp_ble_mesh_key {
     uint16_t net_idx;
     uint16_t app_idx;
@@ -121,6 +137,50 @@ static esp_ble_mesh_model_t locate_models[] = {
                               locate_client_op,NULL,&locate_client),
 };
 static uint16_t locate_seq;
+static portMUX_TYPE locate_lock=portMUX_INITIALIZER_UNLOCKED;
+typedef enum { LOC_IDLE, LOC_BINDING, LOC_SENT, LOC_CONFIRMED,
+               LOC_TIMEOUT, LOC_FAILED } locate_phase_t;
+typedef struct {
+    uint16_t address;
+    uint16_t request_id;
+    uint8_t seconds;
+    locate_phase_t phase;
+    int64_t started_us;
+} locate_session_t;
+static locate_session_t locate_session={0};
+
+static void locate_set_phase(uint16_t addr,locate_phase_t from,locate_phase_t to)
+{
+    portENTER_CRITICAL(&locate_lock);
+    if(locate_session.address==addr && locate_session.phase==from)
+        locate_session.phase=to;
+    portEXIT_CRITICAL(&locate_lock);
+}
+static bool locate_is_binding(uint16_t addr)
+{
+    bool yes;
+    portENTER_CRITICAL(&locate_lock);
+    yes=locate_session.address==addr && locate_session.phase==LOC_BINDING;
+    portEXIT_CRITICAL(&locate_lock);
+    return yes;
+}
+int automesh_gateway_locate_status_json(char *out,size_t length)
+{
+    if(!out || length<100)return -1;
+    locate_session_t current;
+    portENTER_CRITICAL(&locate_lock);
+    if((locate_session.phase==LOC_BINDING || locate_session.phase==LOC_SENT) &&
+       esp_timer_get_time()-locate_session.started_us>18000000LL)
+        locate_session.phase=LOC_TIMEOUT;
+    current=locate_session;
+    portEXIT_CRITICAL(&locate_lock);
+    const char *phases[]={"idle","binding","sent","confirmed","timeout","failed"};
+    return snprintf(out,length,
+      "{\"address\":%u,\"request_id\":%u,\"seconds\":%u,\"status\":\"%s\"}",
+      (unsigned)current.address,(unsigned)current.request_id,
+      (unsigned)current.seconds,phases[current.phase]);
+}
+
 
 
 static esp_ble_mesh_cfg_srv_t config_server = {
@@ -316,6 +376,8 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
     switch (event) {
     case ESP_BLE_MESH_PROVISIONER_PROV_ENABLE_COMP_EVT:
         ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_PROV_ENABLE_COMP_EVT, err_code %d", param->provisioner_prov_enable_comp.err_code);
+        if(param->provisioner_prov_enable_comp.err_code==ESP_OK)
+            automesh_restore_nodes();
         break;
     case ESP_BLE_MESH_PROVISIONER_PROV_DISABLE_COMP_EVT:
         ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_PROV_DISABLE_COMP_EVT, err_code %d", param->provisioner_prov_disable_comp.err_code);
@@ -405,6 +467,8 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
              __func__, param->error_code, event, param->params->ctx.addr, opcode);
 
     if (param->error_code) {
+        if(opcode==ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND)
+            locate_set_phase(addr,LOC_BINDING,LOC_FAILED);
         ESP_LOGE(TAG, "Send config client message failed, opcode 0x%04" PRIx32, opcode);
         return;
     }
@@ -454,6 +518,22 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
             break;
         }
         case ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND: {
+            if(param->status_cb.model_app_status.company_id==AUTOMESH_VENDOR_CID &&
+               param->status_cb.model_app_status.model_id==AUTOMESH_LOCATE_SRV_MODEL) {
+                if(param->status_cb.model_app_status.status!=0) {
+                    locate_set_phase(addr,LOC_BINDING,LOC_FAILED);
+                    ESP_LOGW(TAG,"Vendor Locate model rejected AppKey binding (status %u)",
+                             (unsigned)param->status_cb.model_app_status.status);
+                } else if(locate_is_binding(addr)) {
+                    automesh_send_locate_after_bind(addr);
+                }
+                break;
+            }
+            if(param->status_cb.model_app_status.status!=0) {
+                ESP_LOGW(TAG,"Model AppKey bind failed (status %u)",
+                         (unsigned)param->status_cb.model_app_status.status);
+                break;
+            }
             if(param->status_cb.model_app_status.company_id==ESP_BLE_MESH_CID_NVAL &&
                param->status_cb.model_app_status.model_id==ESP_BLE_MESH_MODEL_ID_GEN_ONOFF_SRV) {
                 // Bind the new node vendor Locate model with the same approved AppKey.
@@ -494,6 +574,12 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
         }
         break;
     case ESP_BLE_MESH_CFG_CLIENT_TIMEOUT_EVT:
+        if(opcode==ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND &&
+           locate_is_binding(addr)) {
+            locate_set_phase(addr,LOC_BINDING,LOC_TIMEOUT);
+            ESP_LOGW(TAG,"Locate binding timeout for 0x%04x",addr);
+            break;
+        }
         switch (opcode) {
         case ESP_BLE_MESH_MODEL_OP_COMPOSITION_DATA_GET: {
             esp_ble_mesh_cfg_client_get_state_t get_state = {0};
@@ -638,21 +724,66 @@ static void automesh_health_task(void *arg)
     }
 }
 
-esp_err_t automesh_gateway_locate(uint16_t address,uint8_t duration)
+static esp_err_t automesh_send_locate_after_bind(uint16_t address)
 {
-    if(!ESP_BLE_MESH_ADDR_IS_UNICAST(address) ||
-       duration<1 || duration>30 || !locate_client.model ||
-       !example_ble_mesh_get_node_info(address))return ESP_ERR_INVALID_ARG;
+    if(!locate_is_binding(address))return ESP_ERR_INVALID_STATE;
+    locate_session_t item;
+    portENTER_CRITICAL(&locate_lock);
+    item=locate_session;
+    portEXIT_CRITICAL(&locate_lock);
     esp_ble_mesh_msg_ctx_t ctx={0};
     ctx.net_idx=prov_key.net_idx;
     ctx.app_idx=prov_key.app_idx;
     ctx.addr=address;
     ctx.send_ttl=7;
-    uint16_t id=++locate_seq;
-    uint8_t payload[3]={(uint8_t)(id&0xff),(uint8_t)(id>>8),duration};
-    return esp_ble_mesh_client_model_send_msg(
+    uint8_t payload[3]={(uint8_t)(item.request_id&0xff),
+                        (uint8_t)(item.request_id>>8),item.seconds};
+    esp_err_t err=esp_ble_mesh_client_model_send_msg(
         locate_client.model,&ctx,AUTOMESH_LOCATE_REQ,
         sizeof(payload),payload,4000,true,ROLE_PROVISIONER);
+    locate_set_phase(address,LOC_BINDING,err==ESP_OK?LOC_SENT:LOC_FAILED);
+    if(err!=ESP_OK)ESP_LOGE(TAG,"Locate send failed: %s",esp_err_to_name(err));
+    return err;
+}
+esp_err_t automesh_gateway_locate(uint16_t address,uint8_t duration)
+{
+    if(!ESP_BLE_MESH_ADDR_IS_UNICAST(address) || duration<1 || duration>30)
+        return ESP_ERR_INVALID_ARG;
+    // A saved UI registry entry is not proof that the SDK has restored
+    // encryption keys; refuse to send until the native table knows the node.
+    if(!locate_client.model || !example_ble_mesh_get_node_info(address) ||
+       !esp_ble_mesh_provisioner_get_node_with_addr(address))
+        return ESP_ERR_NOT_FOUND;
+    portENTER_CRITICAL(&locate_lock);
+    int64_t now=esp_timer_get_time();
+    if((locate_session.phase==LOC_BINDING || locate_session.phase==LOC_SENT) &&
+       now-locate_session.started_us<18000000LL) {
+        portEXIT_CRITICAL(&locate_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    locate_session=(locate_session_t){
+        .address=address,.request_id=++locate_seq,.seconds=duration,
+        .phase=LOC_BINDING,.started_us=now
+    };
+    portEXIT_CRITICAL(&locate_lock);
+    // Bind the vendor model again even for nodes provisioned with older
+    // firmware. This is idempotent and addresses older unconfigured nodes.
+    esp_ble_mesh_node_info_t *node=example_ble_mesh_get_node_info(address);
+    esp_ble_mesh_client_common_param_t common={0};
+    esp_ble_mesh_cfg_client_set_state_t bind={0};
+    example_ble_mesh_set_msg_common(&common,node,config_client.model,
+                                     ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND);
+    common.msg_timeout=5000;
+    bind.model_app_bind.element_addr=node->unicast;
+    bind.model_app_bind.model_app_idx=prov_key.app_idx;
+    bind.model_app_bind.model_id=AUTOMESH_LOCATE_SRV_MODEL;
+    bind.model_app_bind.company_id=AUTOMESH_VENDOR_CID;
+    esp_err_t err=esp_ble_mesh_config_client_set_state(&common,&bind);
+    if(err!=ESP_OK) {
+        locate_set_phase(address,LOC_BINDING,LOC_FAILED);
+        ESP_LOGW(TAG,"Locate model bind rejected: %s",esp_err_to_name(err));
+    }
+    return err;
 }
 static void automesh_locate_client_cb(esp_ble_mesh_model_cb_event_t event,
                                      esp_ble_mesh_model_cb_param_t *param)
@@ -663,13 +794,30 @@ static void automesh_locate_client_cb(esp_ble_mesh_model_cb_event_t event,
        param->model_operation.length==3 && param->model_operation.msg &&
        param->model_operation.ctx) {
         const uint8_t *msg=param->model_operation.msg;
-        uint16_t id=(uint16_t)msg[0] | ((uint16_t)msg[1]<<8);
-        ESP_LOGI(TAG,"Locate ACK from 0x%04x, req=%u duration=%u",
-                 param->model_operation.ctx->addr,(unsigned)id,(unsigned)msg[2]);
-        automesh_note_reply(param->model_operation.ctx->addr);
+        const uint16_t id=(uint16_t)msg[0] | ((uint16_t)msg[1]<<8);
+        const uint16_t address=param->model_operation.ctx->addr;
+        bool confirmed=false;
+        portENTER_CRITICAL(&locate_lock);
+        if(locate_session.address==address && locate_session.request_id==id &&
+           locate_session.phase==LOC_SENT) {
+            locate_session.phase=LOC_CONFIRMED;
+            confirmed=true;
+        }
+        portEXIT_CRITICAL(&locate_lock);
+        if(confirmed) {
+            ESP_LOGI(TAG,"Locate ACK from 0x%04x, request=%u",address,(unsigned)id);
+            automesh_note_reply(address);
+        }
     } else if (event==ESP_BLE_MESH_CLIENT_MODEL_SEND_TIMEOUT_EVT &&
-               param->client_send_timeout.opcode==AUTOMESH_LOCATE_REQ) {
-        ESP_LOGW(TAG,"Locate command not acknowledged within timeout");
+               param->client_send_timeout.opcode==AUTOMESH_LOCATE_REQ &&
+               param->client_send_timeout.ctx) {
+        const uint16_t address=param->client_send_timeout.ctx->addr;
+        locate_set_phase(address,LOC_SENT,LOC_TIMEOUT);
+        ESP_LOGW(TAG,"Locate node 0x%04x did not acknowledge",address);
+    } else if(event==ESP_BLE_MESH_MODEL_SEND_COMP_EVT &&
+              param->model_send_comp.opcode==AUTOMESH_LOCATE_REQ &&
+              param->model_send_comp.err_code) {
+        locate_set_phase(locate_session.address,LOC_SENT,LOC_FAILED);
     }
 }
 
@@ -693,6 +841,12 @@ static esp_err_t ble_mesh_init(void)
         return err;
     }
 
+    // Vendor clients must be initialized explicitly before sending custom messages.
+    err=esp_ble_mesh_client_model_init(&locate_models[0]);
+    if(err!=ESP_OK) {
+        ESP_LOGE(TAG,"Locate vendor client init failed: %s",esp_err_to_name(err));
+        return err;
+    }
     err = esp_ble_mesh_provisioner_set_dev_uuid_match(match, sizeof(match), 0x0, false);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set matching device uuid (err %d)", err);
@@ -733,12 +887,14 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Initializing...");
 
-    err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
+    err=nvs_flash_init();
+    if(err!=ESP_OK) {
+        // Never silently destroy Wi-Fi credentials or Mesh keys on a
+        // storage error. An explicit, backed-up recovery is required.
+        ESP_LOGE(TAG,"NVS init failed: %s. No automatic erase performed.",
+                 esp_err_to_name(err));
+        return;
     }
-    ESP_ERROR_CHECK(err);
 
     if (!automesh_web_has_network()) {
         // A reliable local setup AP cannot coexist with our continuous
@@ -775,4 +931,5 @@ void app_main(void)
     configASSERT(xTaskCreate(automesh_health_task, "mesh_health", 4096,
                              NULL, 4, NULL)==pdPASS);
 }
+
 

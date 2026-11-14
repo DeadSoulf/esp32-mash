@@ -85,7 +85,7 @@ small{color:#9eb4c8}
 </div>
 <section class="panel">
 <h2>Устройства</h2>
-<p class="sub">Нажмите «Найти» напротив зарегистрированного узла — только его светодиод начнёт быстро мигать на 15 секунд.</p>
+<p class="sub">«Найти» запускает быстрое мигание выбранного узла на 15 секунд. Результат показывается после подтверждения устройства. Кнопка «Имя» сохраняет название, которое останется после перезагрузки.</p>
 <div style="overflow-x:auto"><table>
 <thead><tr><th>Устройство / UUID</th><th>Адрес Mesh</th><th>Состояние</th><th>Управление</th></tr></thead>
 <tbody id="devices"><tr><td colspan="4" class="sub">Введите ключ администратора</td></tr></tbody>
@@ -109,8 +109,8 @@ let token=sessionStorage.getItem('automesh_admin')||'';
 const $=id=>document.getElementById(id);
 $('secret').value=token;
 function message(s){$('message').textContent=s;}
-function uiState(s){return ({online:'В сети',offline:'Нет связи',pending:'Ожидает подтверждения',denied:'Отклонено',provisioning:'Регистрация...'})[s]||'Неизвестно';}
-function badgeStyle(s){return s==='online'?'good':s==='offline'?'offline':s==='pending'?'warn':'';}
+function uiState(s){return ({online:'В сети',offline:'Нет связи',needs_repair:'Нужна настройка Mesh',pending:'Ожидает подтверждения',denied:'Отклонено',provisioning:'Регистрация...'})[s]||'Неизвестно';}
+function badgeStyle(s){return s==='online'?'good':s==='offline'||s==='needs_repair'?'offline':s==='pending'?'warn':'';}
 async function api(path,method='GET',body){
  const resp=await fetch(path,{method,cache:'no-store',
    headers:{'X-Automesh-Admin':token,'Content-Type':'application/json'},
@@ -139,7 +139,11 @@ async function update(){
  if(!nodes.length){const row=$('devices').insertRow();const cell=row.insertCell();cell.colSpan=4;cell.textContent='Пока не обнаружено устройств';cell.className='sub';}
  for(const node of nodes){
    const row=$('devices').insertRow();
-   const name=row.insertCell();const id=document.createElement('code');id.textContent=node.uuid;name.append(id);
+   const name=row.insertCell();
+   const title=document.createElement('strong');
+   title.textContent=node.name||'ESP32 без имени';
+   const id=document.createElement('code');id.textContent=node.uuid;
+   name.append(title,document.createElement('br'),id);
    const mesh=row.insertCell();mesh.textContent=node.address?'0x'+Number(node.address).toString(16).padStart(4,'0'):'—';
    const status=row.insertCell();const badge=document.createElement('span');badge.className='badge '+badgeStyle(node.state);badge.textContent=uiState(node.state);status.append(badge);
    const actions=row.insertCell();const holder=document.createElement('div');holder.className='operations';actions.append(holder);
@@ -154,13 +158,50 @@ async function update(){
      });
      action('Отклонить',true,async()=>{if(!confirm('Отклонить эту ESP32?'))return;try{await api('/api/deny','POST',{uuid:node.uuid});await update();}catch(e){message(e.message);}});
    }else if(node.address){
-     action('Найти',false,async()=>{
-       try{
-         await api('/api/locate','POST',{address:node.address,seconds:15});
-         message('Команда отправлена на '+node.uuid+'. Светодиод должен быстро мигать 15 секунд. Если узел недоступен, команда не сработает.');
-       }catch(e){message('Не удалось отправить поиск: '+e.message);}
+     action('Имя',true,async()=>{
+       const proposed=prompt('Название устройства (до 48 байт):',node.name||'');
+       if(proposed===null)return;
+       const value=proposed.trim();
+       if(!value || new TextEncoder().encode(value).length>48){
+         message('Название должно содержать от 1 до 48 байт');return;
+       }
+       try {
+         await api('/api/name','POST',{uuid:node.uuid,name:value});
+         message('Имя сохранено: '+value);
+         await update();
+       }catch(e){message('Не удалось сохранить имя: '+e.message);}
      });
-     action('Проверить связь',true,async()=>{try{await api('/api/ping','POST',{address:node.address});message('Запрос проверки отправлен. Дождитесь обновления статуса.');}catch(e){message(e.message);}});
+     if(node.mesh_configured!==false){
+       action('Найти',false,async()=>{
+         try{
+           await api('/api/locate','POST',{address:node.address,seconds:15});
+           message('Настраиваю поиск для '+(node.name||node.uuid)+' и ожидаю подтверждения ESP32...');
+           for(let t=0;t<20;t++){
+             await new Promise(resolve=>setTimeout(resolve,800));
+             const result=await api('/api/locate/status');
+             if(result.address!==node.address)continue;
+             if(result.status==='confirmed'){
+               message('Найдено: '+(node.name||node.uuid)+'. Устройство подтвердило команду, светодиод должен быстро мигать 15 секунд.');
+               return;
+             }
+             if(result.status==='timeout'){
+               message('Нет ответа от '+(node.name||node.uuid)+'. Проверь питание, связь и привязку модели Mesh.');
+               return;
+             }
+             if(result.status==='failed'){
+               message('Не удалось настроить поиск для '+(node.name||node.uuid)+'. Проверь журнал шлюза и версию прошивки узла.');
+               return;
+             }
+           }
+           message('Время ожидания подтверждения истекло для '+(node.name||node.uuid));
+         }catch(e){message('Ошибка команды «Найти»: '+e.message);}
+       });
+       action('Проверить связь',true,async()=>{try{await api('/api/ping','POST',{address:node.address});message('Контрольный запрос отправлен.');}catch(e){message(e.message);}});
+     } else {
+       const hint=document.createElement('small');
+       hint.textContent='Ключи Mesh требуют восстановления';
+       holder.append(hint);
+     }
    }
  }
  }catch(e){$('connection').textContent='Панель не авторизована';$('connection').className='badge warn';message('Ошибка: '+e.message);}
@@ -253,4 +294,5 @@ update();setInterval(update,3000);
 </script>
 </body>
 </html>
+
 

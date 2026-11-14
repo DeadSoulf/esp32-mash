@@ -1,0 +1,57 @@
+name: Validate ESP32-C3 firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gateway/**'
+      - 'node/**'
+      - '.github/workflows/esp-idf-c3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.project }} / esp32c3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: espressif/idf:v5.5.3
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [gateway, node]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify source invariants
+        shell: bash
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Build firmware with persisted Mesh configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          source /opt/esp/idf/export.sh
+          cd "${{ matrix.project }}"
+          grep -qx 'CONFIG_BLE_MESH_SETTINGS=y' sdkconfig.defaults
+          idf.py set-target esp32c3
+          idf.py build
+          grep -qx 'CONFIG_BLE_MESH_SETTINGS=y' sdkconfig
+          ls -l build/*.bin >/dev/null
+
+      - name: Upload verified binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: automesh-${{ matrix.project }}-esp32c3
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ matrix.project }}/build/*.bin
+            ${{ matrix.project }}/build/bootloader/bootloader.bin
+            ${{ matrix.project }}/build/partition_table/partition-table.bin
+            ${{ matrix.project }}/build/flasher_args.json
+

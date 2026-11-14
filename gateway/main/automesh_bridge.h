@@ -1,6 +1,8 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 #include "esp_ble_mesh_provisioning_api.h"
 
@@ -14,6 +16,7 @@ void automesh_provisioned(const uint8_t uuid[16],uint16_t address);
 void automesh_bridge_restore(const uint8_t uuid[16],uint16_t address);
 void automesh_provisioning_closed(void);
 void automesh_note_reply(uint16_t mesh_address);
+void automesh_note_version(uint16_t mesh_address, const uint8_t *data, size_t length);
 esp_err_t automesh_approve_uuid(const char *uuid_hex);
 esp_err_t automesh_deny_uuid(const char *uuid_hex);
 int automesh_devices_json(char *out,size_t capacity);

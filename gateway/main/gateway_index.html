@@ -51,7 +51,7 @@ small{color:#9eb4c8}
 </head>
 <body>
 <main>
-<header><div><h1>ESP32 AutoMesh</h1><p class="sub">Встроенная панель Bluetooth Mesh шлюза</p></div><div class="operations"><div id="connection" class="badge warn">Ожидаю ключ администратора</div><button type="button" id="logout" class="secondary" hidden>Выйти</button></div></header>
+<header><div><h1>ESP32 AutoMesh</h1><p class="sub">Встроенная панель Bluetooth Mesh шлюза · <span id="gatewayVersion">Определяю версию…</span></p></div><div class="operations"><div id="connection" class="badge warn">Ожидаю ключ администратора</div><button type="button" id="logout" class="secondary" hidden>Выйти</button></div></header>
 <section class="panel" id="firstAdmin" hidden>
 <h2>Первый запуск — создание администратора</h2>
 <p class="sub">Шлюз пока не подключён к домашней сети. Его Wi-Fi AutoMesh доступен без пароля.
@@ -112,8 +112,8 @@ small{color:#9eb4c8}
 <div class="wifi-search"><button id="scanMesh" type="button" class="secondary" disabled>Поиск новых устройств</button><span class="sub" id="meshScanStatus" role="status">Войдите в панель для поиска устройств.</span></div>
 <p class="sub">«Найти» запускает быстрое мигание выбранного узла на 15 секунд. Результат показывается после подтверждения устройства. Кнопка «Имя» сохраняет название, которое останется после перезагрузки.</p>
 <div style="overflow-x:auto"><table>
-<thead><tr><th>Устройство / UUID</th><th>Адрес Mesh</th><th>Состояние</th><th>Управление</th></tr></thead>
-<tbody id="devices"><tr><td colspan="4" class="sub">Введите ключ администратора</td></tr></tbody>
+<thead><tr><th>Устройство / UUID</th><th>Адрес Mesh</th><th>Состояние</th><th>Прошивка</th><th>Управление</th></tr></thead>
+<tbody id="devices"><tr><td colspan="5" class="sub">Введите ключ администратора</td></tr></tbody>
 </table></div>
 </section>
 <section class="panel" id="gatewayOta" hidden>
@@ -230,6 +230,8 @@ async function update(){
  if(!token)return;
  const list=await api('/api/devices');
  if(!token)return;
+ $('gatewayVersion').textContent='Версия: '+(state.version||'не определена')+
+   (state.build_id?' · сборка '+state.build_id:'');
  $('connection').textContent='Шлюз доступен';$('connection').className='badge good';
  $('authPanel').hidden=true;
  $('logout').hidden=false;
@@ -254,7 +256,7 @@ async function update(){
  $('live').textContent=nodes.filter(n=>n.online).length;
  $('waiting').textContent=nodes.filter(n=>n.state==='pending').length;
  $('devices').replaceChildren();
- if(!nodes.length){const row=$('devices').insertRow();const cell=row.insertCell();cell.colSpan=4;cell.textContent='Пока не обнаружено устройств';cell.className='sub';}
+ if(!nodes.length){const row=$('devices').insertRow();const cell=row.insertCell();cell.colSpan=5;cell.textContent='Пока не обнаружено устройств';cell.className='sub';}
  for(const node of nodes){
    const row=$('devices').insertRow();
    const name=row.insertCell();
@@ -264,6 +266,10 @@ async function update(){
    name.append(title,document.createElement('br'),id);
    const mesh=row.insertCell();mesh.textContent=node.address?'0x'+Number(node.address).toString(16).padStart(4,'0'):'—';
    const status=row.insertCell();const badge=document.createElement('span');badge.className='badge '+badgeStyle(node.state);badge.textContent=uiState(node.state);status.append(badge);
+   const firmware=row.insertCell();
+   firmware.textContent=node.firmware_version || (node.address?
+     'Не определена (старый узел или нет ответа)':'—');
+   firmware.className='sub';
    const actions=row.insertCell();const holder=document.createElement('div');holder.className='operations';actions.append(holder);
    function action(text,secondary,fn){const btn=document.createElement('button');btn.textContent=text;if(secondary)btn.className='secondary';btn.addEventListener('click',fn);holder.append(btn);}
    if(node.state==='pending'){

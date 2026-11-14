@@ -7,4 +7,7 @@
 #define AUTOMESH_LOCATE_STATUS ESP_BLE_MESH_MODEL_OP_3(0x33, AUTOMESH_VENDOR_CID)
 /* Request: 2-byte little-endian request id, 1-byte duration (1-30 seconds).
  * Status: 2-byte request id, 1-byte accepted duration. */
-
+/* Read-only AppKey-authorized firmware reporting. GET: empty payload;
+ * STATUS: 1..31 ASCII bytes of actual running firmware identity. */
+#define AUTOMESH_FW_VERSION_GET ESP_BLE_MESH_MODEL_OP_3(0x34, AUTOMESH_VENDOR_CID)
+#define AUTOMESH_FW_VERSION_STATUS ESP_BLE_MESH_MODEL_OP_3(0x35, AUTOMESH_VENDOR_CID)

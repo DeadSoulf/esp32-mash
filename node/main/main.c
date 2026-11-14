@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 #include "nvs.h"
 #include "esp_system.h"
 #include "esp_random.h"
@@ -84,6 +85,7 @@ static esp_ble_mesh_gen_onoff_srv_t onoff_server_2 = {
 
 static esp_ble_mesh_model_op_t locate_op[] = {
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_LOCATE_REQ, 3),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_FW_VERSION_GET, 0),
     ESP_BLE_MESH_MODEL_OP_END,
 };
 static esp_ble_mesh_model_t locate_models[] = {
@@ -313,16 +315,33 @@ static void automesh_locate_cb(esp_ble_mesh_model_cb_event_t event,
 {
     if (event != ESP_BLE_MESH_MODEL_OPERATION_EVT ||
         param->model_operation.model != &locate_models[0] ||
-        param->model_operation.opcode != AUTOMESH_LOCATE_REQ ||
-        param->model_operation.length != 3 ||
-        !param->model_operation.msg ||
         !param->model_operation.ctx) return;
 
     const esp_ble_mesh_msg_ctx_t *ctx = param->model_operation.ctx;
-    // Mesh decrypts/authorizes the app key; only the gateway's unicast
-    // address may trigger locating. Ignore group/broadcast messages.
+    // Only the approved gateway may query firmware or trigger locating.
+    // The BLE Mesh stack checks the device's AppKey before dispatch.
     if (ctx->addr != 0x0001 ||
         !ESP_BLE_MESH_ADDR_IS_UNICAST(ctx->recv_dst)) return;
+    if (param->model_operation.opcode == AUTOMESH_FW_VERSION_GET) {
+        if (param->model_operation.length != 0) return;
+        const esp_app_desc_t *app = esp_app_get_description();
+        char version[32];
+        // Hash prefix identifies this exact ELF build, not a Git commit SHA.
+        int count = snprintf(version, sizeof(version), "%.*s %02x%02x%02x%02x",
+                             20, app->version, app->app_elf_sha256[0],
+                             app->app_elf_sha256[1], app->app_elf_sha256[2],
+                             app->app_elf_sha256[3]);
+        if (count <= 0 || count >= (int)sizeof(version)) return;
+        esp_err_t result = esp_ble_mesh_server_model_send_msg(
+            &locate_models[0], param->model_operation.ctx,
+            AUTOMESH_FW_VERSION_STATUS, (uint16_t)count, (uint8_t *)version);
+        if (result != ESP_OK)
+            ESP_LOGW(TAG, "Firmware version reply failed: %s", esp_err_to_name(result));
+        return;
+    }
+    if (param->model_operation.opcode != AUTOMESH_LOCATE_REQ ||
+        param->model_operation.length != 3 ||
+        !param->model_operation.msg) return;
     const uint8_t *payload=param->model_operation.msg;
     uint8_t seconds=payload[2];
     if (seconds < 1 || seconds > 30)return;

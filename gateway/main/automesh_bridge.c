@@ -15,6 +15,7 @@
 #include "esp_ble_mesh_networking_api.h"
 #include "nvs.h"
 #include "esp_timer.h"
+#include "esp_app_desc.h"
 #include "automesh_status_led.h"
 #include "cJSON.h"
 
@@ -31,6 +32,7 @@ typedef struct {
     uint16_t mesh_address;
     int64_t last_reply_us;
     char name[NODE_NAME_BYTES+1];
+    char fw_version[32];  // RAM only; received from the node after boot
 } candidate_t;
 static candidate_t candidates[MAX_CANDIDATES];
 static bool provisioner_ready;
@@ -278,6 +280,30 @@ void automesh_provisioning_closed(void)
     xSemaphoreGive(lock);
 }
 
+void automesh_note_version(uint16_t mesh_address, const uint8_t *data, size_t length)
+{
+    if (!lock || !data || length == 0 ||
+        length >= sizeof(candidates[0].fw_version)) return;
+    // Reject control and non-printable characters from the radio.
+    for (size_t i=0; i<length; ++i) {
+        if (data[i] < 0x20 || data[i] > 0x7e) return;
+    }
+    bool found=false;
+    if (xSemaphoreTake(lock,pdMS_TO_TICKS(100)) != pdTRUE) return;
+    for (int i=0; i<MAX_CANDIDATES; ++i) {
+        candidate_t *c=&candidates[i];
+        if (!c->occupied || c->mesh_address != mesh_address || !c->approved)
+            continue;
+        memcpy(c->fw_version, data, length);
+        c->fw_version[length] = 0;
+        c->last_reply_us = esp_timer_get_time();
+        found=true;
+        break;
+    }
+    xSemaphoreGive(lock);
+    if (found) automesh_led_mark_alive();
+}
+
 void automesh_note_reply(uint16_t mesh_address)
 {
     bool found = false;
@@ -372,6 +398,7 @@ int automesh_devices_json(char *out,size_t cap)
         cJSON_AddStringToObject(item,"uuid",uuid);
         cJSON_AddStringToObject(item,"mac",mac);
         cJSON_AddStringToObject(item,"name",c->name);
+        cJSON_AddStringToObject(item,"firmware_version",c->fw_version);
         cJSON_AddStringToObject(item,"state",status);
         cJSON_AddNumberToObject(item,"address",c->mesh_address);
         cJSON_AddBoolToObject(item,"online",alive && configured);
@@ -409,7 +436,7 @@ static void command_task(void *arg)
 {
     (void)arg;
     char line[160];
-    printf("AUTOMESH {\"event\":\"ready\",\"version\":\"0.3.5-dev\"}\n");
+    printf("AUTOMESH {\"event\":\"ready\",\"version\":\"%s\"}\n", esp_app_get_description()->version);
     fflush(stdout);
     while (true) {
         if (!fgets(line, sizeof(line), stdin)) {
@@ -424,7 +451,7 @@ static void command_task(void *arg)
             continue;
         }
         if(count==1 && strcmp(verb,"HELLO")==0) {
-            printf("AUTOMESH {\"event\":\"ready\",\"version\":\"0.3.5-dev\"}\n");
+            printf("AUTOMESH {\"event\":\"ready\",\"version\":\"%s\"}\n", esp_app_get_description()->version);
             fflush(stdout);
             continue;
         }

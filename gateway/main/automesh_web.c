@@ -4,6 +4,7 @@
 #include "automesh_admin.h"
 #include "automesh_ota.h"
 #include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,7 +252,14 @@ static esp_err_t status_handler(httpd_req_t *req)
     if(!authorize(req))return ESP_OK;
     cJSON *doc=cJSON_CreateObject();
     if(!doc)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"No memory");
-    cJSON_AddStringToObject(doc,"version","0.3.9-dev");
+    // Read the actual running application, not the release manifest.
+    const esp_app_desc_t *running = esp_app_get_description();
+    char build_id[9];
+    snprintf(build_id, sizeof(build_id), "%02x%02x%02x%02x",
+             running->app_elf_sha256[0], running->app_elf_sha256[1],
+             running->app_elf_sha256[2], running->app_elf_sha256[3]);
+    cJSON_AddStringToObject(doc,"version",running->version);
+    cJSON_AddStringToObject(doc,"build_id",build_id);
 #if CONFIG_IDF_TARGET_ESP32C3
     cJSON_AddStringToObject(doc,"chip","ESP32-C3");
 #elif CONFIG_IDF_TARGET_ESP32S3

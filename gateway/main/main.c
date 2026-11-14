@@ -123,6 +123,7 @@ static esp_ble_mesh_client_t onoff_client;
 
 static const esp_ble_mesh_client_op_pair_t locate_op_pairs[] = {
     {AUTOMESH_LOCATE_REQ,AUTOMESH_LOCATE_STATUS},
+    {AUTOMESH_FW_VERSION_GET,AUTOMESH_FW_VERSION_STATUS},
 };
 static esp_ble_mesh_client_t locate_client = {
     .op_pair_size=ARRAY_SIZE(locate_op_pairs),
@@ -130,6 +131,7 @@ static esp_ble_mesh_client_t locate_client = {
 };
 static esp_ble_mesh_model_op_t locate_client_op[] = {
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_LOCATE_STATUS,3),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_FW_VERSION_STATUS,1),
     ESP_BLE_MESH_MODEL_OP_END,
 };
 static esp_ble_mesh_model_t locate_models[] = {
@@ -149,6 +151,7 @@ typedef struct {
 } locate_session_t;
 static locate_session_t locate_session={0};
 static esp_err_t automesh_send_locate_after_bind(uint16_t address);
+static esp_err_t automesh_gateway_request_version(uint16_t address);
 
 static void locate_set_phase(uint16_t addr,locate_phase_t from,locate_phase_t to)
 {
@@ -525,8 +528,9 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
                     locate_set_phase(addr,LOC_BINDING,LOC_FAILED);
                     ESP_LOGW(TAG,"Vendor Locate model rejected AppKey binding (status %u)",
                              (unsigned)param->status_cb.model_app_status.status);
-                } else if(locate_is_binding(addr)) {
-                    automesh_send_locate_after_bind(addr);
+                } else {
+                    if(locate_is_binding(addr)) automesh_send_locate_after_bind(addr);
+                    (void)automesh_gateway_request_version(addr);
                 }
                 break;
             }
@@ -689,6 +693,20 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
     }
 }
 
+static esp_err_t automesh_gateway_request_version(uint16_t address)
+{
+    if (!locate_client.model || !ESP_BLE_MESH_ADDR_IS_UNICAST(address) ||
+        !esp_ble_mesh_provisioner_get_node_with_addr(address))
+        return ESP_ERR_NOT_FOUND;
+    esp_ble_mesh_msg_ctx_t ctx = {0};
+    ctx.net_idx = prov_key.net_idx;
+    ctx.app_idx = prov_key.app_idx;
+    ctx.addr = address;
+    ctx.send_ttl = 7;
+    return esp_ble_mesh_client_model_send_msg(locate_client.model, &ctx,
+        AUTOMESH_FW_VERSION_GET, 0, NULL, 3500, true, ROLE_PROVISIONER);
+}
+
 esp_err_t automesh_gateway_ping(uint16_t address)
 {
     esp_ble_mesh_node_info_t *node=example_ble_mesh_get_node_info(address);
@@ -706,6 +724,7 @@ static void automesh_health_task(void *arg)
 {
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(20000));
+    uint32_t firmware_poll_cycle = 0;
     while (true) {
         for (int i=0; i<ARRAY_SIZE(nodes); ++i) {
             if (nodes[i].elem_num == 0 ||
@@ -719,8 +738,13 @@ static void automesh_health_task(void *arg)
                 if (e!=ESP_OK) ESP_LOGW(TAG,"Node 0x%04x ping failed: %s",
                                          nodes[i].unicast,esp_err_to_name(e));
             }
+            // Status query at boot, then approximately every 60 seconds.
+            // This cannot register an unknown device or start an update.
+            if ((firmware_poll_cycle % 6u) == 0u)
+                (void)automesh_gateway_request_version(nodes[i].unicast);
             vTaskDelay(pdMS_TO_TICKS(200));
         }
+        ++firmware_poll_cycle;
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
@@ -789,6 +813,17 @@ esp_err_t automesh_gateway_locate(uint16_t address,uint8_t duration)
 static void automesh_locate_client_cb(esp_ble_mesh_model_cb_event_t event,
                                      esp_ble_mesh_model_cb_param_t *param)
 {
+    if(event==ESP_BLE_MESH_MODEL_OPERATION_EVT &&
+       param->model_operation.model==&locate_models[0] &&
+       param->model_operation.opcode==AUTOMESH_FW_VERSION_STATUS &&
+       param->model_operation.ctx && param->model_operation.msg &&
+       param->model_operation.length > 0 &&
+       param->model_operation.length < 32) {
+        automesh_note_version(param->model_operation.ctx->addr,
+                              param->model_operation.msg,
+                              param->model_operation.length);
+        return;
+    }
     if(event==ESP_BLE_MESH_MODEL_OPERATION_EVT &&
        param->model_operation.model==&locate_models[0] &&
        param->model_operation.opcode==AUTOMESH_LOCATE_STATUS &&

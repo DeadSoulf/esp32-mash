@@ -48,7 +48,7 @@ class FastMeshOtaTests(unittest.TestCase):
         self.assertIn("automesh_gateway_node_ota_max_chunk()",server)
         self.assertIn("[96,224].includes(Number(session.max_chunk))",html)
         self.assertIn("Number(session.max_chunk):96",html)
-        self.assertIn("offset+=blockBytes",html)
+        self.assertIn("offset+=batchBytes",html)
         self.assertIn("offset+blockBytes",html)
         self.assertIn("const speed=Math.round(done/elapsed)",html)
         self.assertIn("const timeLeft=",html)
@@ -56,7 +56,7 @@ class FastMeshOtaTests(unittest.TestCase):
 
     def test_all_versions_match(self):
         for role in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.21-dev")',src(role+"/CMakeLists.txt"))
-        self.assertIn("AutoMesh-v0.3.21-dev.zip",src(".github/workflows/esp-idf-c3.yml"))
+            self.assertIn('set(PROJECT_VER "0.3.22-dev")',src(role+"/CMakeLists.txt"))
+        self.assertIn("AutoMesh-v0.3.22-dev.zip",src(".github/workflows/esp-idf-c3.yml"))
 
 if __name__=="__main__":unittest.main()

@@ -28,7 +28,7 @@ class UsbServerTests(unittest.TestCase):
         self.assertIn("USBMODE",bridge)
         self.assertIn("snapshot_end",bridge)
         self.assertIn("snapshot_begin",bridge)
-        self.assertIn('\"event\":\"device\"',bridge.replace("\\\\\"","\""))
+        self.assertIn('cJSON_AddStringToObject(obj,"event","device")',bridge)
         self.assertNotIn("nvs_flash_erase(",bridge)
 
     def test_unknown_nodes_require_manual_approval(self):

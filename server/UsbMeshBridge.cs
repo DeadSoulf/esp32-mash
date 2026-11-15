@@ -115,6 +115,7 @@ public sealed class UsbMeshBridge : BackgroundService
                         port.WriteLine(command);
                     if (DateTimeOffset.UtcNow >= nextRefresh)
                     {
+                        port.WriteLine("HELLO");
                         port.WriteLine("LIST");
                         nextRefresh = DateTimeOffset.UtcNow.AddSeconds(5);
                     }

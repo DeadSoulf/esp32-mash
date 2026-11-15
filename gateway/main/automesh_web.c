@@ -544,7 +544,7 @@ static esp_err_t node_ota_batch_handler(httpd_req_t *req)
         return json_reply(req,"400 Bad Request","{\"error\":\"missing_offset\"}");
     char *end=NULL;
     unsigned long offset=strtoul(offset_text,&end,10);
-    if(end==offset_text || *end!='\\0' || offset>AUTOMESH_NODE_OTA_MAX_IMAGE)
+    if(end==offset_text || *end!='\0' || offset>AUTOMESH_NODE_OTA_MAX_IMAGE)
         return json_reply(req,"400 Bad Request","{\"error\":\"invalid_offset\"}");
     uint8_t data[4*AUTOMESH_NODE_OTA_BLOCK];
     size_t got=0;

@@ -49,9 +49,9 @@ class MeshOtaAckDelivery(unittest.TestCase):
 
     def test_version_and_build_pipeline(self):
         for p in ("gateway/CMakeLists.txt","node/CMakeLists.txt"):
-            self.assertIn('set(PROJECT_VER "0.3.21-dev")',read(p))
+            self.assertIn('set(PROJECT_VER "0.3.22-dev")',read(p))
         workflow=read(".github/workflows/esp-idf-c3.yml")
-        self.assertIn("AutoMesh-v0.3.21-dev.zip",workflow)
+        self.assertIn("AutoMesh-v0.3.22-dev.zip",workflow)
         self.assertIn("node --check automesh-ui-syntax.js",workflow)
         self.assertIn("OTA",read("docs/PROJECT-STATE.md"))
 

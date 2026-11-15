@@ -78,7 +78,7 @@ gw-c3.bin или gw-s3.bin
 Ручная установка по USB: установщик теперь **всегда требует выбрать
 контроллер**, даже когда подключена одна плата, затем отдельно выбрать
 роль «Шлюз» или «Узел». Для окончательной записи подтверждается выбранный
-COM-порт; MAC перепроверяется после резервного копирования.
+COM-порт; MAC перепроверяется непосредственно перед записью; резервное копирование Flash не производится.
 
 Ограничения: веб-обновление распространяется только на **шлюз**, не на
 удалённые BLE Mesh узлы. Для OTA требуется уже установленная прошивка
@@ -341,3 +341,8 @@ RSSI и качество сигнала (хорошее/среднее/слаб�
 - **Upgrade order**: first gateway via Wi-Fi or USB, then one test node via its existing OTA2 or USB; OTA3 is available only for *subsequent* updates of that node. Verify radio speed, packet loss, power failure, and Relay hops with real hardware before wider rollout. No throughput guarantee is made.
 
 Docs: https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32c3/api-reference/bluetooth/esp-ble-mesh.html and https://github.com/espressif/esp-now.
+
+
+## v0.3.24-dev — установка по USB без автоматической копии Flash
+
+Установщик Windows больше не выполняет `read-flash` и не создаёт полный дамп памяти перед прошивкой. Выбор контроллера и роли, проверка образов, SHA-256 и повторная проверка COM/MAC перед записью сохранены. NVS и Mesh-ключи по умолчанию не стираются. Без копии вернуть старые настройки после повреждения Flash может оказаться невозможно.

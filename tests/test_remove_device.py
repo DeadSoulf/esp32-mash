@@ -49,13 +49,15 @@ class DeleteDeviceUiAndMeshTests(unittest.TestCase):
 
     def test_release_version_and_handoff(self):
         for folder in ("gateway", "node"):
-            self.assertIn('set(PROJECT_VER "0.3.20-dev")',
+            self.assertIn('set(PROJECT_VER "0.3.21-dev")',
                           read(folder + "/CMakeLists.txt"))
         workflow = read(".github/workflows/esp-idf-c3.yml")
-        self.assertIn("v0.3.20-dev", workflow)
+        self.assertIn("v0.3.21-dev", workflow)
         # Markdown wraps the button label across lines; normalize whitespace.
         self.assertIn("Удалить устройство",
                       " ".join(read("docs/PROJECT-STATE.md").split()))
 
 if __name__ == "__main__":
     unittest.main()
+
+# Device-version display is compact in UI; Mesh removal and OTA data remain untouched.

@@ -261,6 +261,13 @@ async function bootstrapAdmin(){
  }catch(e){$('connection').textContent='Нет связи со шлюзом';message('Ошибка загрузки: '+e.message);}
 }
 
+// Keep the OTA capability marker and build hash in the underlying API data.
+// Hide those technical suffixes only when showing firmware versions to users.
+function shortFirmwareVersion(raw){
+ if(!raw)return raw;
+ const match=String(raw).match(/^([vV]?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\s+(C3|S3)(?:\s|$)/);
+ return match?match[1]+' '+match[2]:raw;
+}
 function uiState(s){return ({online:'В сети',offline:'Нет связи',needs_repair:'Нужна настройка Mesh',pending:'Ожидает подтверждения',denied:'Отклонено',provisioning:'Регистрация...',removing:'Удаление...'})[s]||'Неизвестно';}
 function badgeStyle(s){return s==='online'?'good':s==='offline'||s==='needs_repair'?'offline':s==='pending'?'warn':'';}
 function invalidateAuth(reason){
@@ -398,7 +405,8 @@ async function update(){
    const mesh=row.insertCell();mesh.textContent=node.address?'0x'+Number(node.address).toString(16).padStart(4,'0'):'—';
    const status=row.insertCell();const badge=document.createElement('span');badge.className='badge '+badgeStyle(node.state);badge.textContent=uiState(node.state);status.append(badge);
    const firmware=row.insertCell();
-   firmware.textContent=node.firmware_version || (node.address?
+   firmware.textContent=node.firmware_version?
+     shortFirmwareVersion(node.firmware_version):(node.address?
      'Не определена (старый узел или нет ответа)':'—');
    firmware.className='sub';
    const actions=row.insertCell();const holder=document.createElement('div');holder.className='operations';actions.append(holder);
@@ -553,7 +561,7 @@ function refreshMeshNodeMenu(){
  if(!node){closeMeshNodeMenu();return;}
  const gateway=address===1;
  $('meshMenuTitle').textContent=node.name||'ESP32 без имени';
- const version=node.firmware_version||'неизвестна';
+ const version=shortFirmwareVersion(node.firmware_version)||'неизвестна';
  const state=gateway?'Шлюз · в сети':uiState(node.state);
  $('meshMenuInfo').textContent='Состояние: '+state+
    ' · Адрес: 0x'+address.toString(16).padStart(4,'0')+
@@ -760,7 +768,7 @@ function renderMeshMap(){
      ' · 0x'+address.toString(16).padStart(4,'0'));
    meshElement('title',{},group,(node.name||'ESP32 без имени')+
      ' (0x'+address.toString(16)+') · '+
-     (node.firmware_version||'версия неизвестна'));
+     (shortFirmwareVersion(node.firmware_version)||'версия неизвестна'));
  });
  // The map is the only visible content of its tab. Keep diagnostics
  // available to screen readers without adding a separate information panel.

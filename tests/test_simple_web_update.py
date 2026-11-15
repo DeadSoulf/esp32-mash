@@ -82,6 +82,6 @@ class SimpleWebUpdateTests(unittest.TestCase):
     def test_ci_checks_javascript_syntax(self):
         ci=read(".github/workflows/esp-idf-c3.yml")
         self.assertIn("node --check automesh-ui-syntax.js",ci)
-        self.assertIn("v0.3.20-dev",ci)
+        self.assertIn("v0.3.21-dev",ci)
 
 if __name__=="__main__":unittest.main()

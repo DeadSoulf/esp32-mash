@@ -19,7 +19,7 @@ class ShortUpdateFilenames(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn("Web-OTA/"+name,flow)
                 self.assertIn("Web-OTA/"+name,ui)
-        self.assertIn("AutoMesh-v0.3.20-dev.zip",flow)
+        self.assertIn("AutoMesh-v0.3.21-dev.zip",flow)
         self.assertIn("$names = @('gw-c3.bin', 'gw-s3.bin',",flow)
         self.assertIn("Nodes/node-c3.bin",flow)
         self.assertIn("Nodes/node-s3.bin",flow)
@@ -44,7 +44,7 @@ class ShortUpdateFilenames(unittest.TestCase):
         doc=source("docs/PROJECT-STATE.md")
         for filename in ("gw-c3.bin","gw-s3.bin","node-c3.bin","node-s3.bin"):
             self.assertIn(filename,doc)
-        self.assertIn("v0.3.20-dev",doc)
+        self.assertIn("v0.3.21-dev",doc)
 
 if __name__=="__main__":
     unittest.main()

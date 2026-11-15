@@ -72,6 +72,15 @@ void automesh_gateway_node_ota_on_status(uint16_t source,
     if (accept) xSemaphoreGive(reply_event);
 }
 
+static const char *ota_stage(uint32_t opcode)
+{
+    if (opcode == AUTOMESH_NODE_OTA_START) return "start";
+    if (opcode == AUTOMESH_NODE_OTA_DATA) return "data";
+    if (opcode == AUTOMESH_NODE_OTA_FINISH) return "finish";
+    if (opcode == AUTOMESH_NODE_OTA_ABORT) return "abort";
+    return "unknown";
+}
+
 static esp_err_t send_await(uint32_t opcode, const uint8_t *payload,
                             size_t len, uint32_t expected_offset)
 {
@@ -83,45 +92,74 @@ static esp_err_t send_await(uint32_t opcode, const uint8_t *payload,
         return ESP_ERR_INVALID_STATE;
     }
     addr=transfer.address;
-    transfer.expected_ack=expected_offset;
-    transfer.awaiting=true;
     portEXIT_CRITICAL(&state_guard);
-    // Drain a late ACK from an earlier attempt.
-    while (xSemaphoreTake(reply_event, 0) == pdTRUE) {}
-    esp_ble_mesh_msg_ctx_t ctx={0};
-    ctx.net_idx=mesh_net_idx;
-    ctx.app_idx=mesh_app_idx;
-    ctx.addr=addr;
-    ctx.send_ttl=5;
-    esp_err_t err=esp_ble_mesh_client_model_send_msg(mesh_model, &ctx, opcode,
-        (uint16_t)len, (uint8_t *)payload, 0, false, ROLE_PROVISIONER);
-    if (err != ESP_OK) {
-        portENTER_CRITICAL(&state_guard);
-        transfer.awaiting=false;
-        portEXIT_CRITICAL(&state_guard);
-        return err;
-    }
-    // ESP flash erase on START and final image verification can take longer
-    // than a normal Mesh chunk acknowledgement.
+
+    // Lost Mesh acknowledgements are normal on a busy radio network.
+    // START and DATA are idempotent on the node; FINISH is intentionally
+    // never repeated because the node may already have rebooted.
+    const unsigned attempts = (opcode==AUTOMESH_NODE_OTA_START ||
+                               opcode==AUTOMESH_NODE_OTA_DATA) ? 3u : 1u;
     const uint32_t timeout_ms=opcode==AUTOMESH_NODE_OTA_START?45000u:
-                              opcode==AUTOMESH_NODE_OTA_FINISH?30000u:8500u;
-    if (xSemaphoreTake(reply_event, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+                              opcode==AUTOMESH_NODE_OTA_FINISH?30000u:
+                              opcode==AUTOMESH_NODE_OTA_DATA?15000u:8500u;
+
+    for (unsigned attempt=1; attempt<=attempts; ++attempt) {
         portENTER_CRITICAL(&state_guard);
-        transfer.awaiting=false;
+        if (!transfer.active) {
+            portEXIT_CRITICAL(&state_guard);
+            return ESP_ERR_INVALID_STATE;
+        }
+        transfer.expected_ack=expected_offset;
+        transfer.awaiting=true;
         portEXIT_CRITICAL(&state_guard);
-        return ESP_ERR_TIMEOUT;
+
+        while (xSemaphoreTake(reply_event, 0) == pdTRUE) {}
+        esp_ble_mesh_msg_ctx_t ctx={0};
+        ctx.net_idx=mesh_net_idx;
+        ctx.app_idx=mesh_app_idx;
+        ctx.addr=addr;
+        ctx.send_ttl=5;
+        esp_err_t err=esp_ble_mesh_client_model_send_msg(mesh_model, &ctx, opcode,
+            (uint16_t)len, (uint8_t *)payload, 0, false, ROLE_PROVISIONER);
+        if(err!=ESP_OK) {
+            portENTER_CRITICAL(&state_guard);
+            transfer.awaiting=false;
+            portEXIT_CRITICAL(&state_guard);
+            ESP_LOGW(TAG,"Mesh OTA send error stage=%s node=0x%04x offset=%lu attempt=%u: %s",
+                     ota_stage(opcode),addr,(unsigned long)expected_offset,
+                     attempt,esp_err_to_name(err));
+            if(attempt==attempts)return err;
+        } else if (xSemaphoreTake(reply_event, pdMS_TO_TICKS(timeout_ms))==pdTRUE) {
+            uint8_t status;
+            uint32_t actual;
+            portENTER_CRITICAL(&state_guard);
+            status=transfer.ack_status;
+            actual=transfer.ack_offset;
+            portEXIT_CRITICAL(&state_guard);
+            if(status!=0) {
+                ESP_LOGW(TAG,"Mesh OTA NACK stage=%s node=0x%04x offset=%lu status=%u",
+                         ota_stage(opcode),addr,(unsigned long)actual,(unsigned)status);
+                return status==1 ? ESP_ERR_INVALID_STATE :
+                       status==2 ? ESP_ERR_INVALID_ARG : ESP_FAIL;
+            }
+            if (opcode != AUTOMESH_NODE_OTA_DATA)
+                ESP_LOGI(TAG,"Mesh OTA ACK stage=%s node=0x%04x offset=%lu",
+                         ota_stage(opcode),addr,(unsigned long)actual);
+            return ESP_OK;
+        } else {
+            portENTER_CRITICAL(&state_guard);
+            transfer.awaiting=false;
+            portEXIT_CRITICAL(&state_guard);
+            ESP_LOGW(TAG,"Mesh OTA ACK TIMEOUT stage=%s node=0x%04x offset=%lu "
+                         "attempt=%u/%u waited=%lums",
+                     ota_stage(opcode),addr,(unsigned long)expected_offset,
+                     attempt,attempts,(unsigned long)timeout_ms);
+            if(attempt==attempts)return ESP_ERR_TIMEOUT;
+        }
+        // Give the segmented transport a short recovery interval.
+        vTaskDelay(pdMS_TO_TICKS(250u*attempt));
     }
-    uint8_t status;
-    portENTER_CRITICAL(&state_guard);
-    status=transfer.ack_status;
-    portEXIT_CRITICAL(&state_guard);
-    if (status != 0) {
-        ESP_LOGW(TAG, "Node %04x refused OTA cmd (reason %u)",
-                 addr, (unsigned)status);
-        return (status == 1) ? ESP_ERR_INVALID_STATE :
-               (status == 2) ? ESP_ERR_INVALID_ARG : ESP_FAIL;
-    }
-    return ESP_OK;
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t automesh_gateway_node_ota_start(uint16_t address, uint8_t chip,

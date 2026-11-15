@@ -207,7 +207,12 @@ async function api(path,method='GET',body){
    body:body?JSON.stringify(body):undefined});
  if(!resp.ok){
    let detail='HTTP '+resp.status;
-   try{detail=(await resp.json()).error||detail;}catch(_e){}
+   try{
+     const reply=await resp.json();
+     detail=reply.error||detail;
+     if(reply.stage)detail+=' (этап '+({start:'начала OTA',
+       data:'передачи данных',finish:'завершения',abort:'отмены'}[reply.stage]||reply.stage)+')';
+   }catch(_e){}
    const err=Error(detail);
    err.status=resp.status;
    if(keyUsed===token && resp.status===401){
@@ -715,7 +720,7 @@ async function uploadNodeImage(option,bytes,digest){
  const progress=$('otaProgress'),bar=$('otaProgressBar');
  let started=false;
  try{
-   progress.textContent='Запрашиваю начало OTA у узла...';
+   progress.textContent='Запрашиваю начало OTA у узла... Подготовка Flash может занять некоторое время.';
    await api('/api/ota/node/start','POST',{address,chip,size:bytes.length,sha256:digest});
    started=true;
    for(let offset=0;offset<bytes.length;offset+=96){
@@ -734,7 +739,14 @@ async function uploadNodeImage(option,bytes,digest){
            invalidateAuth('Доступ к шлюзу завершился во время OTA');
            throw Error('Потеряна авторизация');
          }
-         if(!response.ok)throw Error('HTTP '+response.status);
+         if(!response.ok){
+           let reason='HTTP '+response.status;
+           try{
+             const info=await response.json();
+             reason=(info.error||reason)+' ('+(info.stage||'data')+')';
+           }catch(_){}
+           throw Error(reason);
+         }
          const ack=await response.json();
          if(ack.offset!==offset+block.length)throw Error('Неверный ответ узла');
          ok=true;
@@ -785,7 +797,8 @@ $('otaForm').addEventListener('submit',async e=>{
       'Файл проверен. Шлюз перезагружается; откройте страницу после восстановления Wi-Fi.';
  }catch(err){
    progress.textContent='Обновление не завершено: '+err.message+
-     '. Не отключайте питание; проверьте установленную версию.';
+     '. Проверьте питание и Mesh-связь с узлом. '+
+     'Старая прошивка остаётся активной до успешной проверки.';
  }finally{
    otaBusy(false,false);
    if(token)update();

@@ -750,6 +750,12 @@ static void automesh_health_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(20000));
     uint32_t firmware_poll_cycle = 0;
     while (true) {
+        // Mesh OTA needs airtime for segmented transfer and acknowledgements.
+        // Defer health pings/version scans while any node is updating.
+        if (automesh_gateway_node_ota_active()) {
+            vTaskDelay(pdMS_TO_TICKS(10000));
+            continue;
+        }
         for (int i=0; i<ARRAY_SIZE(nodes); ++i) {
             if (nodes[i].elem_num == 0 ||
                 !ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast)) continue;

@@ -11,6 +11,7 @@
 #include "mbedtls/sha256.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_ble_mesh_networking_api.h"
 
 static const char *TAG = "AUTOMESH_NODE_OTA";
@@ -26,6 +27,18 @@ typedef struct {
     int64_t touched;
 } ota_session_t;
 static ota_session_t ota;
+
+// Never erase or write Flash inside the Bluetooth Mesh callback. A lengthy
+// esp_ota_begin() can starve Mesh segmentation and lose the START response.
+typedef struct {
+    esp_ble_mesh_model_t *model;
+    esp_ble_mesh_msg_ctx_t ctx;
+    uint32_t opcode;
+    uint16_t length;
+    uint8_t data[6 + AUTOMESH_NODE_OTA_BLOCK];
+} ota_message_t;
+static QueueHandle_t ota_requests;
+static TaskHandle_t ota_worker;
 
 static uint8_t local_chip(void)
 {
@@ -79,7 +92,7 @@ static bool image_header_matches_chip(const uint8_t *buffer, size_t length)
 #endif
 }
 
-bool automesh_node_ota_command(esp_ble_mesh_model_t *model,
+static bool process_ota_command(esp_ble_mesh_model_t *model,
                               const esp_ble_mesh_msg_ctx_t *ctx,
                               uint32_t opcode, const uint8_t *p, size_t length)
 {
@@ -107,6 +120,14 @@ bool automesh_node_ota_command(esp_ble_mesh_model_t *model,
             ack(model, ctx, id, 0, 2);
             return true;
         }
+        if (ota.active && ota.id == id && ota.size == size &&
+            ota.chip == p[6] && memcmp(ota.expected_sha, p + 7, 32) == 0) {
+            // Lost START ACK: acknowledge the existing session instead of
+            // replying BUSY and abandoning a valid in-progress update.
+            ota.touched = esp_timer_get_time();
+            ack(model, ctx, id, ota.received, 0);
+            return true;
+        }
         if (ota.active) {
             // A disconnected upload never replaces the running firmware.
             // A stale transfer can be abandoned after 120s of inactivity.
@@ -118,7 +139,9 @@ bool automesh_node_ota_command(esp_ble_mesh_model_t *model,
             }
         }
         esp_ota_handle_t handle = 0;
-        esp_err_t result = esp_ota_begin(part, size, &handle);
+        // Sequential erase avoids a long full-partition erase and keeps BLE Mesh
+        // responsive. Flash operations run only on the OTA worker task.
+        esp_err_t result = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &handle);
         if (result != ESP_OK) {
             ack(model, ctx, id, 0, 4);
             return true;
@@ -219,6 +242,64 @@ bool automesh_node_ota_command(esp_ble_mesh_model_t *model,
             xTaskCreate(reboot_after_ota, "node_ota_restart", 2048, NULL, 4, NULL);
         }
         return true;
+    }
+    return true;
+}
+
+static void ota_worker_task(void *argument)
+{
+    (void)argument;
+    ota_message_t message;
+    while (true) {
+        if (xQueueReceive(ota_requests, &message, portMAX_DELAY) != pdTRUE)
+            continue;
+        (void)process_ota_command(message.model, &message.ctx,
+                                  message.opcode, message.data, message.length);
+    }
+}
+
+esp_err_t automesh_node_ota_init(void)
+{
+    if (ota_requests) return ESP_OK;
+    ota_requests = xQueueCreate(4, sizeof(ota_message_t));
+    if (!ota_requests) return ESP_ERR_NO_MEM;
+    if (xTaskCreate(ota_worker_task, "node_mesh_ota", 5120,
+                    NULL, 5, &ota_worker) != pdPASS) {
+        vQueueDelete(ota_requests);
+        ota_requests = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "Mesh OTA worker ready: Flash operations outside BLE callback");
+    return ESP_OK;
+}
+
+bool automesh_node_ota_command(esp_ble_mesh_model_t *model,
+                              const esp_ble_mesh_msg_ctx_t *ctx,
+                              uint32_t opcode, const uint8_t *payload,
+                              size_t length)
+{
+    if (opcode != AUTOMESH_NODE_OTA_START &&
+        opcode != AUTOMESH_NODE_OTA_DATA &&
+        opcode != AUTOMESH_NODE_OTA_FINISH &&
+        opcode != AUTOMESH_NODE_OTA_ABORT)
+        return false;
+    if (!model || !ctx || ctx->addr != 0x0001 ||
+        !ESP_BLE_MESH_ADDR_IS_UNICAST(ctx->recv_dst))
+        return true;
+    if (!payload || length < 2 ||
+        length > 6 + AUTOMESH_NODE_OTA_BLOCK || !ota_requests) {
+        ESP_LOGW(TAG, "Invalid OTA opcode=0x%08lx, length=%u, queue=%d",
+                 (unsigned long)opcode, (unsigned)length, !!ota_requests);
+        return true;
+    }
+    ota_message_t message = {.model = model, .ctx = *ctx,
+                             .opcode = opcode, .length = (uint16_t)length};
+    memcpy(message.data, payload, length);
+    if (xQueueSend(ota_requests, &message, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "OTA worker busy; rejecting opcode 0x%08lx",
+                 (unsigned long)opcode);
+        // Reject rather than hanging the sending gateway forever.
+        ack(model, ctx, automesh_u16(payload), ota.received, 1);
     }
     return true;
 }

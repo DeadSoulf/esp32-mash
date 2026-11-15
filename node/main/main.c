@@ -452,6 +452,14 @@ static esp_err_t ble_mesh_init(void)
         return err;
     }
 
+    // Never erase Flash in the BLE host callback: start a dedicated OTA
+    // worker before provisioning activates Mesh receive callbacks.
+    err = automesh_node_ota_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Mesh OTA worker failed to start: %s", esp_err_to_name(err));
+        return err;
+    }
+
     err = esp_ble_mesh_node_prov_enable((esp_ble_mesh_prov_bearer_t)(ESP_BLE_MESH_PROV_ADV | ESP_BLE_MESH_PROV_GATT));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable mesh node (err %d)", err);

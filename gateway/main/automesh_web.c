@@ -407,10 +407,12 @@ static esp_err_t host_ota_handler(httpd_req_t *req)
  * the complete node firmware or overwrites its own OTA fallback partition.
  * Each BLE Mesh slice is acknowledged by the selected node.
  */
-static esp_err_t node_ota_error(httpd_req_t *req, esp_err_t err)
+static esp_err_t node_ota_error(httpd_req_t *req, esp_err_t err,
+                                const char *stage)
 {
-    char body[100];
-    snprintf(body,sizeof(body),"{\"error\":\"%s\"}",esp_err_to_name(err));
+    char body[140];
+    snprintf(body,sizeof(body),"{\"error\":\"%s\",\"stage\":\"%s\"}",
+             esp_err_to_name(err),stage);
     const char *status=err==ESP_ERR_TIMEOUT ? "504 Gateway Timeout" :
         err==ESP_ERR_INVALID_STATE ? "409 Conflict" :
         err==ESP_ERR_NOT_SUPPORTED ? "412 Precondition Failed" :
@@ -462,7 +464,7 @@ static esp_err_t node_ota_start_handler(httpd_req_t *req)
     esp_err_t result=automesh_gateway_node_ota_start((uint16_t)a->valueint,
                         target,(uint32_t)sz->valueint,digest,&session);
     cJSON_Delete(body);
-    if(result!=ESP_OK)return node_ota_error(req,result);
+    if(result!=ESP_OK)return node_ota_error(req,result,"start");
     char out[90];
     snprintf(out,sizeof(out),"{\"accepted\":true,\"session\":%u,\"offset\":0}",session);
     return json_reply(req,"200 OK",out);
@@ -494,7 +496,7 @@ static esp_err_t node_ota_chunk_handler(httpd_req_t *req)
     uint32_t next=0;
     esp_err_t result=automesh_gateway_node_ota_chunk((uint32_t)offset,
                                                        chunk,got,&next);
-    if(result!=ESP_OK)return node_ota_error(req,result);
+    if(result!=ESP_OK)return node_ota_error(req,result,"data");
     char out[70];
     snprintf(out,sizeof(out),"{\"accepted\":true,\"offset\":%lu}",(unsigned long)next);
     return json_reply(req,"200 OK",out);
@@ -506,7 +508,7 @@ static esp_err_t node_ota_finish_handler(httpd_req_t *req)
         return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"OTA forbidden");
     esp_err_t result=automesh_gateway_node_ota_finish();
     return result==ESP_OK?json_reply(req,"200 OK","{\"completed\":true}"):
-                          node_ota_error(req,result);
+                          node_ota_error(req,result,"finish");
 }
 static esp_err_t node_ota_abort_handler(httpd_req_t *req)
 {
@@ -515,7 +517,7 @@ static esp_err_t node_ota_abort_handler(httpd_req_t *req)
         return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"OTA forbidden");
     esp_err_t result=automesh_gateway_node_ota_abort();
     return result==ESP_OK?json_reply(req,"200 OK","{\"aborted\":true}"):
-                          node_ota_error(req,result);
+                          node_ota_error(req,result,"abort");
 }
 
 static esp_err_t action_handler(httpd_req_t *req)

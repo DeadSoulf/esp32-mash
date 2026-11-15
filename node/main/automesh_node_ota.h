@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include "esp_ble_mesh_defs.h"
 #include "esp_err.h"
+/* Initialize worker before enabling Mesh reception. */
+esp_err_t automesh_node_ota_init(void);
 /* Returns true when a command belongs to the node OTA protocol. */
 bool automesh_node_ota_command(esp_ble_mesh_model_t *model,
                               const esp_ble_mesh_msg_ctx_t *ctx,

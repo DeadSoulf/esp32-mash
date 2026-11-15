@@ -5,6 +5,8 @@
 #include <string.h>
 #include <stdbool.h>
 #include <inttypes.h>
+#include <unistd.h>
+#include <errno.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -579,64 +581,183 @@ int automesh_devices_json(char *out,size_t cap)
     return (int)len;
 }
 
-static void list_candidates(void)
+/* USB server mode persists across restarts. It NEVER clears Mesh keys/NVS.
+ * A physical USB host can opt into/out of dedicated USB provisioning mode.
+ */
+bool automesh_bridge_usb_mode(void)
 {
-    if (xSemaphoreTake(lock, portMAX_DELAY) != pdTRUE) return;
-    for (int i = 0; i < MAX_CANDIDATES; ++i) {
-        candidate_t *c = &candidates[i];
-        if (!c->occupied || c->rejected) continue;
-        char u[33], a[13];
-        hex_bytes(c->device.uuid, 16, u);
-        hex_bytes(c->device.addr, 6, a);
-        printf("AUTOMESH {\"event\":\"candidate\",\"uuid\":\"%s\",\"addr\":\"%s\",\"approved\":%s}\n",
-               u, a, c->approved ? "true" : "false");
+    nvs_handle_t h;
+    if(nvs_open("automesh",NVS_READONLY,&h)!=ESP_OK)return false;
+    uint8_t enabled=0;
+    esp_err_t e=nvs_get_u8(h,"usb_mode",&enabled);
+    nvs_close(h);
+    return e==ESP_OK && enabled==1;
+}
+
+static esp_err_t set_usb_mode(bool enabled)
+{
+    nvs_handle_t h;
+    esp_err_t e=nvs_open("automesh",NVS_READWRITE,&h);
+    if(e!=ESP_OK)return e;
+    e=nvs_set_u8(h,"usb_mode",enabled?1:0);
+    if(e==ESP_OK)e=nvs_commit(h);
+    nvs_close(h);
+    return e;
+}
+
+static void usb_ready(void)
+{
+    const char *version=esp_app_get_description()->version;
+    printf("AUTOMESH {\"event\":\"ready\",\"version\":\"%s\",\"protocol\":1,"
+           "\"usb_mode\":%s,\"mesh_ready\":%s}\n",
+           version,automesh_bridge_usb_mode()?"true":"false",
+           provisioner_ready?"true":"false");
+    fflush(stdout);
+}
+
+/* Avoid printing secrets. Emit one bounded JSON object per device instead
+ * of creating a large single-line snapshot that may exhaust USB buffers.
+ * The source of truth is still the Mesh provisioner + runtime registry.
+ */
+static void usb_list_devices(void)
+{
+    printf("AUTOMESH {\"event\":\"snapshot_begin\"}\n");
+    unsigned count=0;
+    for(int i=0;i<MAX_CANDIDATES;i++) {
+        candidate_t c={0};
+        bool configured=false;
+        if(!lock || xSemaphoreTake(lock,pdMS_TO_TICKS(250))!=pdTRUE)continue;
+        if(candidates[i].occupied) {
+            c=candidates[i];
+            configured=provisioner_ready && c.mesh_address &&
+                esp_ble_mesh_provisioner_get_node_with_uuid(c.device.uuid)!=NULL;
+        }
+        xSemaphoreGive(lock);
+        if(!c.occupied)continue;
+        char uuid[33],mac[13];
+        hex_bytes(c.device.uuid,16,uuid);
+        hex_bytes(c.device.addr,6,mac);
+        const int64_t now=esp_timer_get_time();
+        const bool online=configured && c.last_reply_us &&
+                           now-c.last_reply_us<35000000LL;
+        const char *state=c.removing?"removing":c.rejected?"denied":
+           c.mesh_address?(configured?(online?"online":"offline"):"needs_repair"):
+           c.approved?"provisioning":"pending";
+        cJSON *obj=cJSON_CreateObject();
+        if(!obj)continue;
+        cJSON_AddStringToObject(obj,"event","device");
+        cJSON_AddStringToObject(obj,"uuid",uuid);
+        cJSON_AddStringToObject(obj,"mac",mac);
+        cJSON_AddStringToObject(obj,"name",c.name);
+        cJSON_AddStringToObject(obj,"state",state);
+        cJSON_AddStringToObject(obj,"firmware_version",c.fw_version);
+        cJSON_AddNumberToObject(obj,"address",c.mesh_address);
+        cJSON_AddBoolToObject(obj,"online",online);
+        cJSON_AddBoolToObject(obj,"mesh_configured",configured);
+        char *json=cJSON_PrintUnformatted(obj);
+        cJSON_Delete(obj);
+        if(json) {
+            printf("AUTOMESH %s\n",json);
+            free(json);
+            count++;
+        }
     }
-    xSemaphoreGive(lock);
+    printf("AUTOMESH {\"event\":\"snapshot_end\",\"count\":%u}\n",count);
+    fflush(stdout);
+}
+
+static void handle_usb_command(const char *input)
+{
+    char verb[16]={0}, argument[40]={0};
+    const int fields=sscanf(input,"%15s %39s",verb,argument);
+    if(fields==1 && strcmp(verb,"HELLO")==0) {
+        usb_ready();
+        return;
+    }
+    if(fields==1 && strcmp(verb,"LIST")==0) {
+        usb_list_devices();
+        return;
+    }
+    if(fields==2 && strcmp(verb,"USBMODE")==0 &&
+       (strcmp(argument,"0")==0 || strcmp(argument,"1")==0)) {
+        bool enabled=argument[0]=='1';
+        esp_err_t e=set_usb_mode(enabled);
+        if(e==ESP_OK) {
+            printf("AUTOMESH {\"event\":\"usb_mode_changed\",\"enabled\":%s,"
+                   "\"restarting\":true}\n",enabled?"true":"false");
+            fflush(stdout);
+            vTaskDelay(pdMS_TO_TICKS(250));
+            esp_restart();
+        } else {
+            printf("AUTOMESH {\"event\":\"error\",\"command\":\"USBMODE\","
+                   "\"reason\":\"%s\"}\n",esp_err_to_name(e));
+        }
+        return;
+    }
+    uint8_t uuid[16];
+    if(fields!=2 || !from_hex(argument,uuid,sizeof(uuid))) {
+        printf("AUTOMESH {\"event\":\"error\",\"reason\":\"invalid_command\"}\n");
+        fflush(stdout);
+        return;
+    }
+    if(!provisioner_ready) {
+        printf("AUTOMESH {\"event\":\"error\",\"uuid\":\"%s\","
+               "\"reason\":\"mesh_not_ready\"}\n",argument);
+        fflush(stdout);
+        return;
+    }
+    esp_err_t e=ESP_ERR_INVALID_ARG;
+    if(strcmp(verb,"APPROVE")==0)e=automesh_approve_uuid(argument);
+    else if(strcmp(verb,"DENY")==0)e=automesh_deny_uuid(argument);
+    if(e==ESP_OK) {
+        printf("AUTOMESH {\"event\":\"%s\",\"uuid\":\"%s\"}\n",
+               strcmp(verb,"APPROVE")==0?"approval_started":"denied",argument);
+    } else {
+        printf("AUTOMESH {\"event\":\"error\",\"uuid\":\"%s\","
+               "\"reason\":\"%s\"}\n",argument,esp_err_to_name(e));
+    }
     fflush(stdout);
 }
 
 static void command_task(void *arg)
 {
     (void)arg;
-    char line[160];
-    printf("AUTOMESH {\"event\":\"ready\",\"version\":\"%s\"}\n", esp_app_get_description()->version);
-    fflush(stdout);
-    while (true) {
-        if (!fgets(line, sizeof(line), stdin)) {
-            clearerr(stdin);
-            vTaskDelay(pdMS_TO_TICKS(200));
+    char line[160]={0};
+    size_t used=0;
+    bool overflow=false;
+    usb_ready();
+    while(true) {
+        /* USB Serial/JTAG VFS is nonblocking by default. fgets() can lose a
+         * split command on EOF; assemble input byte-by-byte instead.
+         */
+        char ch=0;
+        ssize_t n=read(STDIN_FILENO,&ch,1);
+        if(n!=1) {
+            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
-        char verb[16]={0}, uuid_text[40]={0};
-        int count=sscanf(line,"%15s %39s",verb,uuid_text);
-        if(count==1 && strcmp(verb,"LIST")==0) {
-            list_candidates();
+        if(ch=='\r')continue;
+        if(ch=='\n') {
+            if(!overflow && used) {
+                line[used]='\0';
+                handle_usb_command(line);
+            }
+            used=0;
+            overflow=false;
             continue;
         }
-        if(count==1 && strcmp(verb,"HELLO")==0) {
-            printf("AUTOMESH {\"event\":\"ready\",\"version\":\"%s\"}\n", esp_app_get_description()->version);
-            fflush(stdout);
+        if(overflow)continue;
+        if(used+1>=sizeof(line)) {
+            used=0;
+            overflow=true;
             continue;
         }
-        uint8_t uuid[16];
-        if(count!=2 || !from_hex(uuid_text,uuid,sizeof(uuid))) {
-            ESP_LOGW(TAG,"Invalid USB command");
+        if((unsigned char)ch<0x20 || (unsigned char)ch>0x7e) {
+            used=0;
+            overflow=true;
             continue;
         }
-        esp_err_t e=ESP_ERR_INVALID_ARG;
-        if(strcmp(verb,"APPROVE")==0) {
-            e=automesh_approve_uuid(uuid_text);
-        } else if(strcmp(verb,"DENY")==0) {
-            e=automesh_deny_uuid(uuid_text);
-        }
-        if(e==ESP_OK) {
-            printf("AUTOMESH {\"event\":\"%s\",\"uuid\":\"%s\"}\n",
-                   strcmp(verb,"APPROVE")==0?"approval_started":"denied",uuid_text);
-        } else {
-            printf("AUTOMESH {\"event\":\"error\",\"uuid\":\"%s\",\"reason\":\"%s\"}\n",
-                   uuid_text,esp_err_to_name(e));
-        }
-        fflush(stdout);
+        line[used++]=ch;
     }
 }
 

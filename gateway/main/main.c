@@ -1085,12 +1085,14 @@ void app_main(void)
         return;
     }
 
-    if (!automesh_web_has_network()) {
-        // A reliable local setup AP cannot coexist with our continuous
-        // Mesh provisioning scanner on C3. Use AP ONLY for Wi-Fi setup.
-        ESP_LOGW(TAG, "Setup AP mode; Bluetooth Mesh paused until router Wi-Fi is configured");
+    const bool usb_only=automesh_bridge_usb_mode();
+    if (!usb_only && !automesh_web_has_network()) {
+        // Wi-Fi setup AP and BLE provisioning conflict on C3. The USB
+        // console remains active so a PC can explicitly select USB mode.
+        ESP_LOGW(TAG, "Setup AP mode; Mesh paused until Wi-Fi or USB mode is configured");
         automesh_bridge_init();
         automesh_led_start();
+        automesh_bridge_start();
         ESP_ERROR_CHECK(automesh_web_start());
         automesh_mark_boot_healthy();
         return;
@@ -1115,6 +1117,13 @@ void app_main(void)
     }
     automesh_restore_nodes();
     automesh_bridge_start();
+    if(usb_only) {
+        ESP_LOGI(TAG,"USB-only Mesh provisioner active; Wi-Fi disabled");
+        automesh_mark_boot_healthy();
+        configASSERT(xTaskCreate(automesh_health_task, "mesh_health", 4096,
+                                 NULL, 4, NULL)==pdPASS);
+        return;
+    }
     ESP_ERROR_CHECK(automesh_web_start());
     // The web Wi-Fi callback confirms pending OTA only after DHCP succeeds.
     configASSERT(xTaskCreate(automesh_health_task, "mesh_health", 4096,

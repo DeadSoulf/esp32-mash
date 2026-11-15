@@ -10,6 +10,8 @@
 void automesh_bridge_init(void);
 void automesh_bridge_mesh_ready(void);
 void automesh_bridge_start(void);
+/* Persistent USB-only gateway mode: no Wi-Fi required, NVS preserved. */
+bool automesh_bridge_usb_mode(void);
 void automesh_candidate(const uint8_t uuid[16],const uint8_t addr[6],
                         esp_ble_mesh_addr_type_t type,uint16_t oob_info,
                         esp_ble_mesh_prov_bearer_t bearer);

@@ -80,7 +80,7 @@ class MeshPopupAndNeighborsTests(unittest.TestCase):
 
     def test_release_version(self):
         for role in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.25-dev")',read(role+"/CMakeLists.txt"))
-        self.assertIn("AutoMesh-v0.3.25-dev.zip",read(".github/workflows/esp-idf-c3.yml"))
+            self.assertIn('set(PROJECT_VER "0.3.26-dev")',read(role+"/CMakeLists.txt"))
+        self.assertIn("AutoMesh-v0.3.26-dev.zip",read(".github/workflows/esp-idf-c3.yml"))
 
 if __name__=="__main__": unittest.main()

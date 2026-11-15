@@ -49,10 +49,10 @@ class DeleteDeviceUiAndMeshTests(unittest.TestCase):
 
     def test_release_version_and_handoff(self):
         for folder in ("gateway", "node"):
-            self.assertIn('set(PROJECT_VER "0.3.25-dev")',
+            self.assertIn('set(PROJECT_VER "0.3.26-dev")',
                           read(folder + "/CMakeLists.txt"))
         workflow = read(".github/workflows/esp-idf-c3.yml")
-        self.assertIn("v0.3.25-dev", workflow)
+        self.assertIn("v0.3.26-dev", workflow)
         # Markdown wraps the button label across lines; normalize whitespace.
         self.assertIn("Удалить устройство",
                       " ".join(read("docs/PROJECT-STATE.md").split()))

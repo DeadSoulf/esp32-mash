@@ -51,15 +51,18 @@ class MeshOtaTimeoutRecoveryTests(unittest.TestCase):
         self.assertIn('if (automesh_gateway_node_ota_active())',main)
         self.assertIn('if(reply.stage)',html)
 
-    def test_wifi_setting_is_last_except_admin(self):
+    def test_wifi_and_admin_settings_are_in_dedicated_tab(self):
         html=read("gateway/main/gateway_index.html")
+        settings=html.index('<div id="settingsTab"')
         wifi=html.index('<section id="wifiSetup"')
         admin=html.index('<section id="adminChange"')
-        self.assertGreater(wifi, html.index("Радиосвязь и индикация"))
+        self.assertLess(settings,wifi)
         self.assertLess(wifi,admin)
         self.assertLess(admin,html.index("</main>"))
+        self.assertNotIn("Радиосвязь и индикация",html)
         self.assertIn('id="wifiForm"',html)
         self.assertIn('id="scanWifi"',html)
+        self.assertIn('id="changeAdminForm"',html)
 
     def test_release_version(self):
         self.assertIn("AutoMesh-v0.3.18-dev.zip",

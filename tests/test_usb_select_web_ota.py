@@ -97,6 +97,10 @@ class USBInstallerTests(unittest.TestCase):
         self.assertIn('current=identify(selected["port"])', source)
         self.assertIn("reset_nvs=args.erase_nvs", source)
 
+    def test_full_flash_backup_helpers_are_removed(self):
+        self.assertFalse(hasattr(self.installer, "backup_flash"))
+        self.assertFalse(hasattr(self.installer, "existing_role"))
+
     def test_cancel_last_step_does_not_flash(self):
         from pathlib import Path
         dev=DEVICES[0]

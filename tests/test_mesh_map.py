@@ -68,12 +68,12 @@ class MeshMapTests(unittest.TestCase):
 
     def test_ci_and_firmware_version_match(self):
         workflow=source(".github/workflows/esp-idf-c3.yml")
-        self.assertIn("AutoMesh-v0.3.18-dev.zip",workflow)
+        self.assertIn("AutoMesh-v0.3.19-dev.zip",workflow)
         for name in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.18-dev")',
+            self.assertIn('set(PROJECT_VER "0.3.19-dev")',
                           source(name+"/CMakeLists.txt"))
         self.assertIn("automesh_topology.c",
                       source("gateway/main/CMakeLists.txt"))
-        self.assertIn("v0.3.18-dev",source("docs/PROJECT-STATE.md"))
+        self.assertIn("v0.3.19-dev",source("docs/PROJECT-STATE.md"))
 
 if __name__=="__main__": unittest.main()

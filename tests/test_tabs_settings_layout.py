@@ -95,7 +95,7 @@ class TabLayoutTests(unittest.TestCase):
     def test_release_version(self):
         for role in ("gateway", "node"):
             project=(ROOT/role/"CMakeLists.txt").read_text(encoding="utf-8")
-            self.assertIn('set(PROJECT_VER "0.3.18-dev")', project)
+            self.assertIn('set(PROJECT_VER "0.3.19-dev")', project)
 
 if __name__ == "__main__":
     unittest.main()

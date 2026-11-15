@@ -11,10 +11,15 @@
 #define AUTOMESH_NODE_OTA_ABORT ESP_BLE_MESH_MODEL_OP_3(0x39, AUTOMESH_VENDOR_CID)
 #define AUTOMESH_NODE_OTA_STATUS ESP_BLE_MESH_MODEL_OP_3(0x3A, AUTOMESH_VENDOR_CID)
 #define AUTOMESH_PEER_HELLO ESP_BLE_MESH_MODEL_OP_3(0x3B, AUTOMESH_VENDOR_CID)
-#define AUTOMESH_NODE_OTA_BLOCK 96u
+/* OTA1 nodes accept at most 96 bytes. OTA2 nodes accept 224 bytes in one
+ * application message, still below the BLE Mesh 384-byte upper-transport SDU.
+ * Never send OTA2 packets until the node advertises OTA2 explicitly.
+ */
+#define AUTOMESH_NODE_OTA_LEGACY_BLOCK 96u
+#define AUTOMESH_NODE_OTA_BLOCK 224u
 #define AUTOMESH_NODE_OTA_MAX_IMAGE 0x1c0000u
 /* START: session_id:2, size:4, chip:'C' or 'S', sha256:32.
- * DATA: session_id:2, offset:4, binary:1..96.
+ * DATA: session_id:2, offset:4, binary:1..96 (OTA1) or 1..224 (OTA2).
  * FINISH/ABORT: session_id:2.
  * STATUS: session_id:2, next_offset:4, code:1 (0=OK, 1=busy,
  * 2=invalid input, 3=integrity/image failure, 4=flash failure).

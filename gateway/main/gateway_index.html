@@ -338,10 +338,11 @@ async function update(){
    if(!n.address || n.state==='removing')continue;
    const v=n.firmware_version||'Версия неизвестна';
    const chip=v.includes(' C3 ')?'C3':v.includes(' S3 ')?'S3':'';
+   const supportsOta=v.includes(' OTA1 ')||v.includes(' OTA2 ');
    const item=new Option('Узел: '+(n.name||'ESP32 без имени')+' · '+v+
-      ((!n.online||!chip||!v.includes(' OTA1 '))?' (нужен USB)':''),
+      ((!n.online||!chip||!supportsOta)?' (нужен USB)':''),
       'node:'+n.address);
-   item.disabled=!state.mesh_ota_ready||!n.online||!chip||!v.includes(' OTA1 ');
+   item.disabled=!state.mesh_ota_ready||!n.online||!chip||!supportsOta;
    item.dataset.chip=chip;
    item.dataset.role='node';
    item.dataset.address=String(n.address);
@@ -1023,11 +1024,20 @@ async function uploadNodeImage(option,bytes,digest){
  let started=false;
  try{
    progress.textContent='Запрашиваю начало OTA у узла... Подготовка Flash может занять некоторое время.';
-   await api('/api/ota/node/start','POST',{address,chip,size:bytes.length,sha256:digest});
+   const session=await api('/api/ota/node/start','POST',
+     {address,chip,size:bytes.length,sha256:digest});
    started=true;
-   for(let offset=0;offset<bytes.length;offset+=96){
+   // OTA1 firmware only accepts 96 bytes. OTA2 advertises 224; a gateway
+   // missing max_chunk is treated as legacy, never as fast by default.
+   const blockBytes=[96,224].includes(Number(session.max_chunk))?
+     Number(session.max_chunk):96;
+   const startTime=performance.now();
+   let lastProgressAt=0;
+   progress.textContent='Передаю по BLE Mesh: '+(blockBytes===224?
+     'ускоренный OTA2':'совместимый OTA1')+' ('+blockBytes+' байт/блок).';
+   for(let offset=0;offset<bytes.length;offset+=blockBytes){
      if(nodeOtaCancelled)throw Error('Остановлено пользователем');
-     const block=bytes.subarray(offset,Math.min(bytes.length,offset+96));
+     const block=bytes.subarray(offset,Math.min(bytes.length,offset+blockBytes));
      let ok=false,reason='';
      for(let attempt=0;attempt<3&&!ok;attempt++){
        try{
@@ -1055,11 +1065,21 @@ async function uploadNodeImage(option,bytes,digest){
        }catch(e){reason=e.message;}
      }
      if(!ok)throw Error('Ошибка передачи блока '+offset+': '+reason);
-     if(offset%1536===0||offset+block.length===bytes.length){
-       const pct=Math.floor((offset+block.length)*100/bytes.length);
-       bar.value=pct;
-       progress.textContent='Узел: '+pct+'% ('+(offset+block.length)+' / '+
-           bytes.length+' байт). Не закрывайте страницу.';
+     const now=performance.now();
+     if(now-lastProgressAt>=2000 || offset+block.length===bytes.length){
+       const done=offset+block.length;
+       const pct=(100*done/bytes.length).toFixed(1);
+       const elapsed=Math.max(1,(now-startTime)/1000);
+       const speed=Math.round(done/elapsed);
+       const remain=Math.ceil((bytes.length-done)/Math.max(speed,1));
+       const timeLeft=remain>=3600?(remain/3600).toFixed(1)+' ч':
+                      Math.ceil(remain/60)+' мин';
+       bar.value=100*done/bytes.length;
+       progress.textContent='Узел: '+pct+'% · '+speed+
+           ' байт/с · осталось ~'+timeLeft+
+           ' · '+(blockBytes===224?'OTA2':'OTA1')+
+           '. Не закрывайте страницу.';
+       lastProgressAt=now;
      }
    }
    progress.textContent='Проверяю SHA-256 на узле и завершаю OTA...';

@@ -18,3 +18,4 @@ esp_err_t automesh_gateway_node_ota_finish(void);
 esp_err_t automesh_gateway_node_ota_abort(void);
 bool automesh_gateway_node_ota_active(void);
 uint32_t automesh_gateway_node_ota_progress(void);
+uint16_t automesh_gateway_node_ota_max_chunk(void);

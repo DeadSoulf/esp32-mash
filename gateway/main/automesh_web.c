@@ -486,8 +486,10 @@ static esp_err_t node_ota_start_handler(httpd_req_t *req)
                         target,(uint32_t)sz->valueint,digest,&session);
     cJSON_Delete(body);
     if(result!=ESP_OK)return node_ota_error(req,result,"start");
-    char out[90];
-    snprintf(out,sizeof(out),"{\"accepted\":true,\"session\":%u,\"offset\":0}",session);
+    char out[116];
+    snprintf(out,sizeof(out),
+             "{\"accepted\":true,\"session\":%u,\"offset\":0,\"max_chunk\":%u}",
+             session,(unsigned)automesh_gateway_node_ota_max_chunk());
     return json_reply(req,"200 OK",out);
 }
 static esp_err_t node_ota_chunk_handler(httpd_req_t *req)

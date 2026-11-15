@@ -18,6 +18,7 @@ typedef struct {
     uint32_t size, sent, expected_ack, ack_offset;
     uint8_t ack_status;
     uint8_t chip;
+    uint16_t chunk_len;   // Negotiated OTA1=96 or OTA2=224; never inferred
 } ota_state_t;
 
 static esp_ble_mesh_model_t *mesh_model;
@@ -42,6 +43,14 @@ bool automesh_gateway_node_ota_active(void)
     active=transfer.active;
     portEXIT_CRITICAL(&state_guard);
     return active;
+}
+uint16_t automesh_gateway_node_ota_max_chunk(void)
+{
+    uint16_t n=0;
+    portENTER_CRITICAL(&state_guard);
+    if(transfer.active)n=transfer.chunk_len;
+    portEXIT_CRITICAL(&state_guard);
+    return n;
 }
 uint32_t automesh_gateway_node_ota_progress(void)
 {
@@ -180,6 +189,9 @@ esp_err_t automesh_gateway_node_ota_start(uint16_t address, uint8_t chip,
     // Never send experimental OTA opcodes to unknown, offline or old firmware.
     if (!automesh_node_ota_supported(address, chip))
         return ESP_ERR_NOT_SUPPORTED;
+    const uint16_t max_chunk=automesh_node_ota_block_size(address);
+    if (max_chunk!=AUTOMESH_NODE_OTA_LEGACY_BLOCK &&
+        max_chunk!=AUTOMESH_NODE_OTA_BLOCK) return ESP_ERR_NOT_SUPPORTED;
     const uint16_t proposed_id=(uint16_t)(esp_random()|1u);
     portENTER_CRITICAL(&state_guard);
     if (transfer.active) {
@@ -187,7 +199,7 @@ esp_err_t automesh_gateway_node_ota_start(uint16_t address, uint8_t chip,
         return ESP_ERR_INVALID_STATE;
     }
     transfer=(ota_state_t){.active=true,.address=address,
-        .id=proposed_id,.chip=chip,.size=image_size};
+        .id=proposed_id,.chip=chip,.size=image_size,.chunk_len=max_chunk};
     portEXIT_CRITICAL(&state_guard);
     uint8_t packet[39];
     automesh_put16(packet, transfer.id);
@@ -205,7 +217,8 @@ esp_err_t automesh_gateway_node_ota_start(uint16_t address, uint8_t chip,
         return err;
     }
     *session=transfer.id;
-    ESP_LOGI(TAG,"Node OTA accepted by 0x%04x; %lu bytes",address,(unsigned long)image_size);
+    ESP_LOGI(TAG,"Node OTA accepted by 0x%04x; %lu bytes, max DATA block=%u",
+             address,(unsigned long)image_size,(unsigned)max_chunk);
     return ESP_OK;
 }
 
@@ -215,6 +228,8 @@ esp_err_t automesh_gateway_node_ota_chunk(uint32_t offset, const uint8_t *data,
     if (!data || !confirmed || len < 1 || len > AUTOMESH_NODE_OTA_BLOCK)
         return ESP_ERR_INVALID_ARG;
     if (!transfer.active) return ESP_ERR_INVALID_STATE;
+    // Never send a larger DATA message to an installed OTA1-only node.
+    if(len>transfer.chunk_len) return ESP_ERR_INVALID_ARG;
     // Retry of a single request whose HTTP reply was lost.
     if (offset < transfer.sent && offset + len == transfer.sent) {
         *confirmed=transfer.sent;

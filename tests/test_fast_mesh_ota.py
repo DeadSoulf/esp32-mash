@@ -33,8 +33,10 @@ class FastMeshOtaTests(unittest.TestCase):
     def test_node_advertises_ota2_and_supports_both_data_sizes(self):
         node=src("node/main/main.c")
         ota=src("node/main/automesh_node_ota.c")
-        self.assertIn(" OTA2 %02x",node)
+        self.assertIn(" OTA3 %02x",node)
         self.assertIn("AUTOMESH_NODE_OTA_BLOCK",ota)
+        self.assertIn("AUTOMESH_NODE_OTA_STREAM",ota)
+        self.assertIn("AUTOMESH_NODE_OTA_CHECKPOINT",ota)
         self.assertIn("esp_ota_write(ota.handle",ota)
         self.assertIn("mbedtls_sha256_update(&ota.sha",ota)
         self.assertIn("memcmp(actual, ota.expected_sha, 32)",ota)
@@ -49,6 +51,7 @@ class FastMeshOtaTests(unittest.TestCase):
         self.assertIn("[96,224].includes(Number(session.max_chunk))",html)
         self.assertIn("Number(session.max_chunk):96",html)
         self.assertIn("offset+=batchBytes",html)
+        self.assertIn("session.transport==='OTA3'",html)
         self.assertIn("offset+block.length",html)
         self.assertIn("const batchBytes=blockBytes*4",html)
         self.assertIn("/api/ota/node/batch",html)
@@ -60,7 +63,7 @@ class FastMeshOtaTests(unittest.TestCase):
 
     def test_all_versions_match(self):
         for role in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.22-dev")',src(role+"/CMakeLists.txt"))
-        self.assertIn("AutoMesh-v0.3.22-dev.zip",src(".github/workflows/esp-idf-c3.yml"))
+            self.assertIn('set(PROJECT_VER "0.3.23-dev")',src(role+"/CMakeLists.txt"))
+        self.assertIn("AutoMesh-v0.3.23-dev.zip",src(".github/workflows/esp-idf-c3.yml"))
 
 if __name__=="__main__":unittest.main()

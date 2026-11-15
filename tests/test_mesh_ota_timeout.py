@@ -35,7 +35,7 @@ class MeshOtaTimeoutRecoveryTests(unittest.TestCase):
     def test_mesh_sender_retries_start_and_data_but_not_finish(self):
         gw=read("gateway/main/automesh_gateway_node_ota.c")
         self.assertIn('opcode==AUTOMESH_NODE_OTA_START ||',gw)
-        self.assertIn('opcode==AUTOMESH_NODE_OTA_DATA) ? 3u : 1u',gw)
+        self.assertIn('opcode==AUTOMESH_NODE_OTA_CHECKPOINT) ? 3u : 1u',gw)
         self.assertIn('attempt<=attempts',gw)
         self.assertIn('ESP_ERR_TIMEOUT',gw)
         self.assertIn('ACK TIMEOUT stage=',gw)
@@ -65,10 +65,10 @@ class MeshOtaTimeoutRecoveryTests(unittest.TestCase):
         self.assertIn('id="changeAdminForm"',html)
 
     def test_release_version(self):
-        self.assertIn("AutoMesh-v0.3.22-dev.zip",
+        self.assertIn("AutoMesh-v0.3.23-dev.zip",
                       read(".github/workflows/esp-idf-c3.yml"))
         for role in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.22-dev")',
+            self.assertIn('set(PROJECT_VER "0.3.23-dev")',
                           read(role+"/CMakeLists.txt"))
 
 if __name__=="__main__":

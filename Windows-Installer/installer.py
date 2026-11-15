@@ -2,7 +2,7 @@
 # coding: utf-8
 """ESP32 AutoMesh initial installer for Windows.
 Detects ESP32 chip/flash via esptool, chooses only exact-compatible binaries.
-Backs up ALL flash before first installation. Does not erase NVS without opt-in.
+Flashes without reading or backing up Flash. Does not erase NVS without opt-in.
 Standalone EXE build bundles Python/esptool/pyserial and images.
 """
 from __future__ import annotations
@@ -14,8 +14,6 @@ import io
 import json
 import re
 import sys
-import time
-from datetime import datetime
 from pathlib import Path
 
 import esptool
@@ -28,7 +26,6 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 RELEASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-USER_ROOT = Path.home() / "AppData" / "Local" / "ESP32-AutoMesh"
 SUPPORTED_USB_VIDS = {0x303A, 0x10C4, 0x1A86, 0x0403}
 HEX_ROLE = {"gateway": "Шлюз", "node": "Узел"}
 FLASH_MAP = {
@@ -142,36 +139,6 @@ def role_assets(profile_name: str, profile: dict, role: str) -> dict[str, Path]:
     return resolved
 
 
-def existing_role(backup: Path) -> str | None:
-    # Distinguish previous AutoMesh application from binary strings.
-    content = backup.read_bytes()
-    if b"AUTOMESH_WEB" in content and b"Wi-Fi STA" in content:
-        return "gateway"
-    if b"AUTOMESH_NODE_OOB" in content or (
-        b"BLE Mesh Node initialized" in content and
-        b"BLE Mesh node" in content
-    ):
-        return "node"
-    return None
-
-
-def backup_flash(device: dict) -> Path:
-    folder = USER_ROOT / "Backups"
-    folder.mkdir(parents=True, exist_ok=True)
-    safe_mac = device["mac"].replace(":", "-")
-    name = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = folder / f"esp32-{safe_mac}-{name}-{device['flash'] // 1048576}MB.bin"
-    line(f"\nРезервная копия всех {device['flash'] // 1048576} МБ Flash:")
-    line(f"  {backup}")
-    sdk_command(["--port", device["port"], "--baud", "460800", "read-flash",
-                 "0x0", hex(device["flash"]), str(backup)])
-    if not backup.is_file() or backup.stat().st_size != device["flash"]:
-        raise RuntimeError("Резервное копирование не завершено. Запись запрещена.")
-    digest = hashlib.sha256(backup.read_bytes()).hexdigest()
-    line(f"Резервная копия проверена. SHA-256: {digest}")
-    return backup
-
-
 def prompt_device(devices: list[dict], chosen_port: str | None) -> dict:
     if not devices:
         raise RuntimeError("Подключённые ESP32 не обнаружены.")
@@ -203,8 +170,6 @@ def choose_role(previous: str | None, requested: str | None) -> str:
     line("\nВЫБОР ПРОШИВКИ:")
     line("  [1] ШЛЮЗ / Gateway — веб-панель, Wi-Fi, Mesh")
     line("  [2] УЗЕЛ / Node — Bluetooth Mesh устройство")
-    if previous:
-        line(f"Ранее установленная роль (по дампу): {HEX_ROLE[previous]}")
     if requested:
         line(f"Роль по --role: {HEX_ROLE[requested]}")
         return requested
@@ -227,7 +192,7 @@ def choose_role(previous: str | None, requested: str | None) -> str:
 def flash_device(device: dict, profile: dict, files: dict[str, Path], reset_nvs=False) -> None:
     port = device["port"]
     if reset_nvs:
-        line("ОЧИСТКА NVS 0x9000..0xEFFF (после резервного копирования)...")
+        line("ОПАСНО: явная очистка NVS 0x9000..0xEFFF — настройки и Mesh-ключи будут потеряны!")
         sdk_command(["--port", port, "--baud", "460800", "erase-region", "0x9000", "0x6000"])
     # Chip type and flash config are verified against manifest before writing.
     flash_mb=profile["flash_size_bytes"]//1048576
@@ -301,33 +266,27 @@ def main() -> int:
         line("Режим проверки: никакие изменения в Flash не выполнены.")
         return 0
 
-    # Select a role first. Validate the exact images before a slow full Flash backup.
+    # Select a role and verify image integrity without reading device Flash.
     role = choose_role(None, args.role)
     files = role_assets(profile_name, profile, role)
-
-    # Always back up the entire Flash before flashing. No extra prompt needed.
-    backup = backup_flash(selected)
-    previous = existing_role(backup)
 
     line("\nИТОГО: готово к записи")
     line(f"  Контроллер: {selected['port']} / {selected['chip']} / MAC {selected['mac']}")
     line(f"  Профиль платы: {profile['board_profile']}")
     line(f"  Прошивка: {HEX_ROLE[role]}")
-    line(f"  Резервная копия: {backup}")
-    if previous and previous != role:
-        line(f"  ВНИМАНИЕ: прежняя роль {HEX_ROLE[previous]}, будет заменена на {HEX_ROLE[role]}.")
+    line("  Резервное копирование перед прошивкой отключено.")
     if args.erase_nvs:
         line("  ВНИМАНИЕ: NVS будет ОЧИЩЕНО — Wi-Fi, Mesh-ключи и данные администратора будут потеряны!")
     else:
         line("  NVS НЕ очищается, сохранённые Wi-Fi и Mesh-ключи останутся.")
     line("  Будут переписаны загрузчик, разделы, OTA-метаданные и приложение.")
-    # One single confirmation for the entire operation, after device/role/backup checks.
+    # Explicit confirmation remains mandatory; COM/MAC/chip re-checked before flashing.
     if input("Начать прошивку? [1] ДА / [0] Отмена: ").strip() != "1":
-        line("Отменено. Резервная копия сохранена, Flash не изменена.")
+        line("Отменено. Flash не изменена.")
         return 5
     current=identify(selected["port"])
     if current is None or any(current[k]!=selected[k] for k in ("chip","flash","mac","port")):
-        raise RuntimeError("Контроллер изменился после резервного копирования. Запись запрещена.")
+        raise RuntimeError("Контроллер изменился перед прошивкой. Запись запрещена.")
     flash_device(selected, profile, files, reset_nvs=args.erase_nvs)
     line("\nПосле загрузки: шлюз создаёт Wi-Fi для настройки или подключается к роутеру.")
     line("Узел появляется в Mesh только после ручного разрешения в веб-панели шлюза.")
@@ -342,7 +301,7 @@ if __name__ == "__main__":
         sys.exit(130)
     except Exception as exc:
         print(f"\nОШИБКА: {exc}", flush=True)
-        print("Если была начата запись, используйте резервную копию для восстановления.", flush=True)
+        print("Если запись прервалась, восстановите устройство по USB проверенной прошивкой.", flush=True)
         sys.exit(1)
 
 

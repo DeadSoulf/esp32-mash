@@ -79,17 +79,23 @@ class USBInstallerTests(unittest.TestCase):
              patch.object(self.installer,"identify",return_value=dev) as identify, \
              patch.object(self.installer,"matching_profile",return_value=("esp32c3-supermini-4mb",profile)), \
              patch.object(self.installer,"role_assets",return_value={"application.bin":Path("app.bin")}), \
-             patch.object(self.installer,"backup_flash",return_value=Path("saved.bin")) as backup, \
-             patch.object(self.installer,"existing_role",return_value="node"), \
              patch.object(self.installer,"flash_device") as flash, \
              patch("builtins.input",side_effect=["1","1"]) as question, \
              patch.object(sys,"argv",["installer.py","--port","COM12"]):
             self.assertEqual(self.installer.main(),0)
         self.assertEqual(question.call_count,2)  # Role + one final confirmation
-        self.assertEqual(identify.call_count,2)   # Before and after backing up
-        backup.assert_called_once_with(dev)
+        self.assertEqual(identify.call_count,2)   # Initial inspection and immediate pre-flash verification
         flash.assert_called_once()
         self.assertFalse(flash.call_args.kwargs["reset_nvs"])
+
+    def test_usb_install_does_not_read_or_backup_flash(self):
+        source=INSTALLER.read_text(encoding="utf-8")
+        self.assertNotIn("read-flash", source)
+        self.assertNotIn("backup_flash(", source)
+        self.assertNotIn("existing_role(", source)
+        self.assertIn("if input(\"Начать прошивку?", source)
+        self.assertIn('current=identify(selected["port"])', source)
+        self.assertIn("reset_nvs=args.erase_nvs", source)
 
     def test_cancel_last_step_does_not_flash(self):
         from pathlib import Path
@@ -99,8 +105,6 @@ class USBInstallerTests(unittest.TestCase):
              patch.object(self.installer,"identify",return_value=dev), \
              patch.object(self.installer,"matching_profile",return_value=("c3",{"board_profile":"C3","led_profile":"GPIO8"})), \
              patch.object(self.installer,"role_assets",return_value={"application.bin":Path("app.bin")}), \
-             patch.object(self.installer,"backup_flash",return_value=Path("saved.bin")), \
-             patch.object(self.installer,"existing_role",return_value="node"), \
              patch.object(self.installer,"flash_device") as flash, \
              patch("builtins.input",side_effect=["1","0"]) as question, \
              patch.object(sys,"argv",["installer.py","--port","COM12"]):
@@ -116,8 +120,6 @@ class USBInstallerTests(unittest.TestCase):
              patch.object(self.installer,"identify",return_value=dev), \
              patch.object(self.installer,"matching_profile",return_value=("c3",{"board_profile":"C3","led_profile":"GPIO8"})), \
              patch.object(self.installer,"role_assets",return_value={"application.bin":Path("app.bin")}), \
-             patch.object(self.installer,"backup_flash",return_value=Path("saved.bin")), \
-             patch.object(self.installer,"existing_role",return_value="node"), \
              patch.object(self.installer,"flash_device") as flash, \
              patch("builtins.input",side_effect=["1","1"]), \
              patch.object(sys,"argv",["installer.py","--port","COM12","--erase-nvs"]):

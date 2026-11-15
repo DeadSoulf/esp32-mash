@@ -53,7 +53,9 @@ class DeleteDeviceUiAndMeshTests(unittest.TestCase):
                           read(folder + "/CMakeLists.txt"))
         workflow = read(".github/workflows/esp-idf-c3.yml")
         self.assertIn("v0.3.12-dev", workflow)
-        self.assertIn("Удалить устройство", read("docs/PROJECT-STATE.md"))
+        # Markdown wraps the button label across lines; normalize whitespace.
+        self.assertIn("Удалить устройство",
+                      " ".join(read("docs/PROJECT-STATE.md").split()))
 
 if __name__ == "__main__":
     unittest.main()

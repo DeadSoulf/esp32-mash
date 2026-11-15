@@ -49,11 +49,14 @@ class SimpleWebUpdateTests(unittest.TestCase):
     def test_zip_auto_selection_checks_target_role_and_chip(self):
         page=read("gateway/main/gateway_index.html")
         self.assertIn("async function unzipOtaImage(archive,option)",page)
-        self.assertIn("Web-OTA/gateway-esp32c3-provisioner.bin",page)
-        self.assertIn("Web-OTA/gateway-esp32s3-zero-provisioner.bin",page)
-        self.assertIn("Web-OTA/Nodes/node-esp32c3-onoff_server.bin",page)
-        self.assertIn("Web-OTA/Nodes/node-esp32s3-zero-onoff_server.bin",page)
+        self.assertIn("Web-OTA/gw-c3.bin",page)
+        self.assertIn("Web-OTA/gw-s3.bin",page)
+        self.assertIn("Web-OTA/Nodes/node-c3.bin",page)
+        self.assertIn("Web-OTA/Nodes/node-s3.bin",page)
         self.assertIn("new DecompressionStream('deflate-raw')",page)
+        # Legacy long names in older release ZIPs still load.
+        self.assertIn("const legacy=option.dataset.role",page)
+        self.assertIn("const acceptedPaths=[wanted.toLowerCase(),legacy.toLowerCase()]",page)
         self.assertIn("Если браузер",read("Windows-Installer/WEB-OTA-README-RU.txt"))
 
     def test_digest_is_automatic_and_update_is_manual(self):
@@ -79,6 +82,6 @@ class SimpleWebUpdateTests(unittest.TestCase):
     def test_ci_checks_javascript_syntax(self):
         ci=read(".github/workflows/esp-idf-c3.yml")
         self.assertIn("node --check automesh-ui-syntax.js",ci)
-        self.assertIn("v0.3.13-dev",ci)
+        self.assertIn("v0.3.14-dev",ci)
 
 if __name__=="__main__":unittest.main()

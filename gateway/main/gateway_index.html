@@ -565,10 +565,16 @@ async function unzipOtaImage(archive,option){
    throw Error('Недопустимый каталог архива ZIP.');
  const chip=option.dataset.chip;
  const wanted=option.dataset.role==='gateway'?
+   (chip==='C3'?'Web-OTA/gw-c3.bin':
+                  'Web-OTA/gw-s3.bin'):
+   (chip==='C3'?'Web-OTA/Nodes/node-c3.bin':
+                  'Web-OTA/Nodes/node-s3.bin');
+ const legacy=option.dataset.role==='gateway'?
    (chip==='C3'?'Web-OTA/gateway-esp32c3-provisioner.bin':
                   'Web-OTA/gateway-esp32s3-zero-provisioner.bin'):
    (chip==='C3'?'Web-OTA/Nodes/node-esp32c3-onoff_server.bin':
                   'Web-OTA/Nodes/node-esp32s3-zero-onoff_server.bin');
+ const acceptedPaths=[wanted.toLowerCase(),legacy.toLowerCase()];
  let pointer=directory,entry=null;
  for(let i=0;i<total;i++){
    if(pointer+46>bytes.length||v.getUint32(pointer,true)!==0x02014b50)
@@ -583,8 +589,8 @@ async function unzipOtaImage(archive,option){
    if(pointer+46+nameLength+extraLength+commentLength>bytes.length)
      throw Error('Запись каталога ZIP выходит за границы файла.');
    const name=new TextDecoder().decode(bytes.subarray(pointer+46,pointer+46+nameLength)).replace(/\\/g,'/');
-   if(name.toLowerCase()===wanted.toLowerCase() ||
-      name.toLowerCase().endsWith('/'+wanted.toLowerCase())){
+   const found=name.toLowerCase();
+   if(acceptedPaths.some(p=>found===p||found.endsWith('/'+p))){
      if(entry)throw Error('В архиве найдены дублирующиеся прошивки.');
      entry={name,method,compressed,uncompressed,local};
    }

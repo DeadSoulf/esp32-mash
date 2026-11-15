@@ -1,12 +1,12 @@
-ESP32 AutoMesh v0.3.13-dev — обновления через веб-панель шлюза
+ESP32 AutoMesh v0.3.14-dev — обновления через веб-панель шлюза
 
 ШЛЮЗ (Web-OTA/):
-  gateway-esp32c3-provisioner.bin      ESP32-C3 SuperMini 4MB
-  gateway-esp32s3-zero-provisioner.bin Waveshare ESP32-S3-Zero 4MB
+  gw-c3.bin      ESP32-C3 SuperMini 4MB
+  gw-s3.bin Waveshare ESP32-S3-Zero 4MB
 
 УЗЛЫ (Web-OTA/Nodes/):
-  node-esp32c3-onoff_server.bin      ESP32-C3 SuperMini 4MB
-  node-esp32s3-zero-onoff_server.bin Waveshare ESP32-S3-Zero 4MB
+  node-c3.bin      ESP32-C3 SuperMini 4MB
+  node-s3.bin Waveshare ESP32-S3-Zero 4MB
 
 SHA256SUMS.txt в этой папке содержит контрольные суммы всех четырёх
 файлов и относительные пути к ним.
@@ -37,3 +37,14 @@ SHA256SUMS.txt в этой папке содержит контрольные с
 - Протокол экспериментальный; проверяйте на одном тестовом узле.
 - Массовая автоматическая OTA, резервный провиженер и принудительное
   переподключение Mesh здесь не реализованы.
+
+Имена OTA-образов сокращены: gw-c3.bin, gw-s3.bin,
+Nodes/node-c3.bin и Nodes/node-s3.bin. «gw» — шлюз,
+«node» — узел, «c3/s3» — тип ESP32. Сам USB-установщик
+продолжает использовать официальные имена файлов ESP-IDF.
+
+При обновлении шлюза v0.3.13-dev из нового ZIP сначала
+распакуйте ZIP на компьютере и выберите .bin (gw-c3.bin/gw-s3.bin):
+старый браузерный интерфейс ищет длинные имена внутри ZIP.
+После установки v0.3.14-dev можно выбирать ZIP целиком;
+новая панель понимает и старые, и короткие имена.

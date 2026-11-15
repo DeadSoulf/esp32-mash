@@ -47,10 +47,10 @@ class MeshOtaAndResilience(unittest.TestCase):
 
     def test_ota_zip_includes_node_and_gateway_images(self):
         ci=load(".github/workflows/esp-idf-c3.yml")
-        self.assertIn("Nodes/node-esp32c3-onoff_server.bin",ci)
-        self.assertIn("Nodes/node-esp32s3-zero-onoff_server.bin",ci)
+        self.assertIn("Nodes/node-c3.bin",ci)
+        self.assertIn("Nodes/node-s3.bin",ci)
         self.assertIn("SHA256SUMS.txt",ci)
-        self.assertIn('v0.3.13-dev',ci)
+        self.assertIn('v0.3.14-dev',ci)
 
     def test_context_document_is_committed(self):
         doc=load("docs/PROJECT-STATE.md")

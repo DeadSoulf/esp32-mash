@@ -115,14 +115,14 @@ jobs:
           Copy-Item Windows-Installer/Check-AutoMesh.cmd _release/
           Copy-Item Windows-Installer/README-RU.txt _release/
           New-Item -ItemType Directory -Path _release/Web-OTA -Force | Out-Null
-          Copy-Item _artifacts/automesh-gateway-esp32c3/provisioner.bin _release/Web-OTA/gateway-esp32c3-provisioner.bin
-          Copy-Item _artifacts/automesh-gateway-esp32s3/provisioner.bin _release/Web-OTA/gateway-esp32s3-zero-provisioner.bin
+          Copy-Item _artifacts/automesh-gateway-esp32c3/provisioner.bin _release/Web-OTA/gw-c3.bin
+          Copy-Item _artifacts/automesh-gateway-esp32s3/provisioner.bin _release/Web-OTA/gw-s3.bin
           New-Item -ItemType Directory -Path _release/Web-OTA/Nodes -Force | Out-Null
-          Copy-Item _artifacts/automesh-node-esp32c3/onoff_server.bin _release/Web-OTA/Nodes/node-esp32c3-onoff_server.bin
-          Copy-Item _artifacts/automesh-node-esp32s3/onoff_server.bin _release/Web-OTA/Nodes/node-esp32s3-zero-onoff_server.bin
+          Copy-Item _artifacts/automesh-node-esp32c3/onoff_server.bin _release/Web-OTA/Nodes/node-c3.bin
+          Copy-Item _artifacts/automesh-node-esp32s3/onoff_server.bin _release/Web-OTA/Nodes/node-s3.bin
           Copy-Item Windows-Installer/WEB-OTA-README-RU.txt _release/Web-OTA/README-RU.txt
-          $names = @('gateway-esp32c3-provisioner.bin', 'gateway-esp32s3-zero-provisioner.bin',
-                     'Nodes/node-esp32c3-onoff_server.bin', 'Nodes/node-esp32s3-zero-onoff_server.bin')
+          $names = @('gw-c3.bin', 'gw-s3.bin',
+                     'Nodes/node-c3.bin', 'Nodes/node-s3.bin')
           $hashes = foreach ($name in $names) {
             $hash = (Get-FileHash -Path (Join-Path '_release/Web-OTA' $name) -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $name"
@@ -130,13 +130,13 @@ jobs:
           $hashes | Set-Content -Path _release/Web-OTA/SHA256SUMS.txt -Encoding ascii
           if ((Get-ChildItem _release/Web-OTA -Filter '*.bin' -Recurse | Measure-Object).Count -ne 4) { throw 'Web-OTA images missing' }
           Copy-Item Windows-Installer/THIRD-PARTY-LICENSES _release/THIRD-PARTY-LICENSES -Recurse
-          Compress-Archive -Path _release/* -DestinationPath AutoMesh-Windows-Installer-v0.3.13-dev.zip -CompressionLevel Optimal -Force
-          Get-FileHash AutoMesh-Windows-Installer-v0.3.13-dev.zip -Algorithm SHA256 | Format-List
+          Compress-Archive -Path _release/* -DestinationPath AutoMesh-v0.3.14-dev.zip -CompressionLevel Optimal -Force
+          Get-FileHash AutoMesh-v0.3.14-dev.zip -Algorithm SHA256 | Format-List
       - name: Upload portable installer archive as CI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: automesh-installer-windows-v0.3.13-dev
-          path: AutoMesh-Windows-Installer-v0.3.13-dev.zip
+          name: automesh-installer-windows-v0.3.14-dev
+          path: AutoMesh-v0.3.14-dev.zip
           retention-days: 14
           if-no-files-found: error
       - name: Publish pre-release for Windows downloads
@@ -145,12 +145,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "v0.3.13-dev" --repo "${{ github.repository }}" 2>$null
+          gh release view "v0.3.14-dev" --repo "${{ github.repository }}" 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "v0.3.13-dev" --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" --title "ESP32 AutoMesh v0.3.13-dev (C3 + S3)" --notes "Windows USB installer with automatic backup and three-step flashing. ZIP contains Web-OTA gateway firmware and Web-OTA/Nodes images for ESP32-C3/S3-Zero plus SHA256 hashes. Authorized gateway UI can update one OTA1 Mesh node at a time; nodes relay peer-to-peer independently of gateway. Gateway failover is not automatic. Admin can update gateway or one OTA1 node in a single web form, using full release ZIP or APP .bin; role/chip and SHA256 are checked automatically. Mesh credentials are preserved."
+            gh release create "v0.3.14-dev" --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" --title "ESP32 AutoMesh v0.3.14-dev (C3 + S3)" --notes "Windows USB installer with automatic backup and three-step flashing. ZIP contains Web-OTA gateway firmware and Web-OTA/Nodes images for ESP32-C3/S3-Zero plus SHA256 hashes. Authorized gateway UI can update one OTA1 Mesh node at a time; nodes relay peer-to-peer independently of gateway. Gateway failover is not automatic. Admin can update gateway or one OTA1 node in a single web form, using full release ZIP or APP .bin; role/chip and SHA256 are checked automatically. Mesh credentials are preserved. OTA files use short names gw-c3.bin, gw-s3.bin, node-c3.bin and node-s3.bin."
             if ($LASTEXITCODE -ne 0) { throw "Release creation failed" }
           }
-          gh release upload "v0.3.13-dev" "AutoMesh-Windows-Installer-v0.3.13-dev.zip" --clobber --repo "${{ github.repository }}"
+          gh release upload "v0.3.14-dev" "AutoMesh-v0.3.14-dev.zip" --clobber --repo "${{ github.repository }}"
           if ($LASTEXITCODE -ne 0) { throw "Release upload failed" }
 
 

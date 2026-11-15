@@ -10,7 +10,7 @@ class FirmwareVersionsAndWebOta(unittest.TestCase):
     def test_project_versions_are_embedded(self):
         for role in ("gateway", "node"):
             with self.subTest(role=role):
-                self.assertIn('set(PROJECT_VER "0.3.13-dev")',
+                self.assertIn('set(PROJECT_VER "0.3.14-dev")',
                               read(role + "/CMakeLists.txt"))
 
     def test_gateway_reports_running_image_version_and_build_id(self):
@@ -42,10 +42,10 @@ class FirmwareVersionsAndWebOta(unittest.TestCase):
     def test_release_web_ota_contains_two_images_and_checksums(self):
         ci = read(".github/workflows/esp-idf-c3.yml")
         self.assertIn("New-Item -ItemType Directory -Path _release/Web-OTA", ci)
-        self.assertIn("_release/Web-OTA/gateway-esp32c3-provisioner.bin", ci)
-        self.assertIn("_release/Web-OTA/gateway-esp32s3-zero-provisioner.bin", ci)
-        self.assertIn("_release/Web-OTA/Nodes/node-esp32c3-onoff_server.bin", ci)
-        self.assertIn("_release/Web-OTA/Nodes/node-esp32s3-zero-onoff_server.bin", ci)
+        self.assertIn("_release/Web-OTA/gw-c3.bin", ci)
+        self.assertIn("_release/Web-OTA/gw-s3.bin", ci)
+        self.assertIn("_release/Web-OTA/Nodes/node-c3.bin", ci)
+        self.assertIn("_release/Web-OTA/Nodes/node-s3.bin", ci)
         self.assertIn("_release/Web-OTA/SHA256SUMS.txt", ci)
         self.assertIn("WEB-OTA-README-RU.txt", ci)
         self.assertIn("ОБНОВЛЕНИЕ ЛЮБОГО УСТРОЙСТВА", read("Windows-Installer/WEB-OTA-README-RU.txt"))

@@ -10,7 +10,7 @@ class FirmwareVersionsAndWebOta(unittest.TestCase):
     def test_project_versions_are_embedded(self):
         for role in ("gateway", "node"):
             with self.subTest(role=role):
-                self.assertIn('set(PROJECT_VER "0.3.12-dev")',
+                self.assertIn('set(PROJECT_VER "0.3.13-dev")',
                               read(role + "/CMakeLists.txt"))
 
     def test_gateway_reports_running_image_version_and_build_id(self):
@@ -48,7 +48,7 @@ class FirmwareVersionsAndWebOta(unittest.TestCase):
         self.assertIn("_release/Web-OTA/Nodes/node-esp32s3-zero-onoff_server.bin", ci)
         self.assertIn("_release/Web-OTA/SHA256SUMS.txt", ci)
         self.assertIn("WEB-OTA-README-RU.txt", ci)
-        self.assertIn("ОБНОВЛЕНИЕ УЗЛА", read("Windows-Installer/WEB-OTA-README-RU.txt"))
+        self.assertIn("ОБНОВЛЕНИЕ ЛЮБОГО УСТРОЙСТВА", read("Windows-Installer/WEB-OTA-README-RU.txt"))
 
 if __name__ == "__main__":
     unittest.main()

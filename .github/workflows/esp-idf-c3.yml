@@ -91,6 +91,15 @@ jobs:
         shell: pwsh
         run: |
           python Windows-Installer/build_release.py --artifacts _artifacts --out _release
+      - name: Check embedded web UI JavaScript syntax
+        shell: pwsh
+        run: |
+          $page = Get-Content gateway/main/gateway_index.html -Raw -Encoding UTF8
+          $script = [regex]::Match($page, '(?s)<script>(.*?)</script>').Groups[1].Value
+          if ([string]::IsNullOrWhiteSpace($script)) { throw 'Web UI script missing' }
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'automesh-ui-syntax.js'), $script)
+          node --check automesh-ui-syntax.js
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid web UI JavaScript' }
       - name: Build and verify self-contained installer
         shell: pwsh
         run: |
@@ -121,13 +130,13 @@ jobs:
           $hashes | Set-Content -Path _release/Web-OTA/SHA256SUMS.txt -Encoding ascii
           if ((Get-ChildItem _release/Web-OTA -Filter '*.bin' -Recurse | Measure-Object).Count -ne 4) { throw 'Web-OTA images missing' }
           Copy-Item Windows-Installer/THIRD-PARTY-LICENSES _release/THIRD-PARTY-LICENSES -Recurse
-          Compress-Archive -Path _release/* -DestinationPath AutoMesh-Windows-Installer-v0.3.12-dev.zip -CompressionLevel Optimal -Force
-          Get-FileHash AutoMesh-Windows-Installer-v0.3.12-dev.zip -Algorithm SHA256 | Format-List
+          Compress-Archive -Path _release/* -DestinationPath AutoMesh-Windows-Installer-v0.3.13-dev.zip -CompressionLevel Optimal -Force
+          Get-FileHash AutoMesh-Windows-Installer-v0.3.13-dev.zip -Algorithm SHA256 | Format-List
       - name: Upload portable installer archive as CI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: automesh-installer-windows-v0.3.12-dev
-          path: AutoMesh-Windows-Installer-v0.3.12-dev.zip
+          name: automesh-installer-windows-v0.3.13-dev
+          path: AutoMesh-Windows-Installer-v0.3.13-dev.zip
           retention-days: 14
           if-no-files-found: error
       - name: Publish pre-release for Windows downloads
@@ -136,12 +145,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "v0.3.12-dev" --repo "${{ github.repository }}" 2>$null
+          gh release view "v0.3.13-dev" --repo "${{ github.repository }}" 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create "v0.3.12-dev" --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" --title "ESP32 AutoMesh v0.3.12-dev (C3 + S3)" --notes "Windows USB installer with automatic backup and three-step flashing. ZIP contains Web-OTA gateway firmware and Web-OTA/Nodes images for ESP32-C3/S3-Zero plus SHA256 hashes. Authorized gateway UI can update one OTA1 Mesh node at a time; nodes relay peer-to-peer independently of gateway. Gateway failover is not automatic. Admin can remove registered nodes from provisioner; Mesh credentials on removed node need manual reset."
+            gh release create "v0.3.13-dev" --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" --title "ESP32 AutoMesh v0.3.13-dev (C3 + S3)" --notes "Windows USB installer with automatic backup and three-step flashing. ZIP contains Web-OTA gateway firmware and Web-OTA/Nodes images for ESP32-C3/S3-Zero plus SHA256 hashes. Authorized gateway UI can update one OTA1 Mesh node at a time; nodes relay peer-to-peer independently of gateway. Gateway failover is not automatic. Admin can update gateway or one OTA1 node in a single web form, using full release ZIP or APP .bin; role/chip and SHA256 are checked automatically. Mesh credentials are preserved."
             if ($LASTEXITCODE -ne 0) { throw "Release creation failed" }
           }
-          gh release upload "v0.3.12-dev" "AutoMesh-Windows-Installer-v0.3.12-dev.zip" --clobber --repo "${{ github.repository }}"
+          gh release upload "v0.3.13-dev" "AutoMesh-Windows-Installer-v0.3.13-dev.zip" --clobber --repo "${{ github.repository }}"
           if ($LASTEXITCODE -ne 0) { throw "Release upload failed" }
 
 

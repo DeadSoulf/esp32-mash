@@ -50,7 +50,7 @@ class MeshOtaAndResilience(unittest.TestCase):
         self.assertIn("Nodes/node-esp32c3-onoff_server.bin",ci)
         self.assertIn("Nodes/node-esp32s3-zero-onoff_server.bin",ci)
         self.assertIn("SHA256SUMS.txt",ci)
-        self.assertIn('v0.3.12-dev',ci)
+        self.assertIn('v0.3.13-dev',ci)
 
     def test_context_document_is_committed(self):
         doc=load("docs/PROJECT-STATE.md")

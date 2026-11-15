@@ -107,31 +107,21 @@ small{color:#9eb4c8}
 <tbody id="devices"><tr><td colspan="5" class="sub">Введите ключ администратора</td></tr></tbody>
 </table></div>
 </section>
-<section class="panel" id="gatewayOta" hidden>
-<h2>Обновление прошивки шлюза через веб-панель</h2>
-<p class="sub">Загружается только приложение шлюза <code>provisioner.bin</code>, собранное именно для вашего ESP32-C3 или ESP32-S3. Не выбирайте архив ZIP, дамп Flash, прошивку узла или bootloader. Обновление ручное, выполняется в резервный OTA-раздел; Wi-Fi, имена устройств и Mesh-ключи в NVS не стираются.</p>
-<form id="gatewayOtaForm">
-<div class="formfield"><label for="otaFirmware">Файл прошивки шлюза (.bin)</label>
-<input id="otaFirmware" type="file" accept=".bin,application/octet-stream" required></div>
-<div class="formfield"><label for="otaSha">SHA-256 файла (необязательно — для дополнительной сверки с опубликованным хешем)</label>
-<input id="otaSha" type="text" maxlength="64" placeholder="64 символа, если есть контрольная сумма"></div>
-<button id="otaUploadButton" type="submit">Проверить и обновить шлюз</button>
+<section class="panel" id="otaPanel" hidden>
+<h2>Обновление прошивки</h2>
+<p class="sub">Выберите устройство, затем файл <code>.bin</code> или весь ZIP-архив AutoMesh из GitHub Releases. Панель сама найдёт нужный образ в архиве, проверит тип ESP32, назначение приложения и SHA-256. Обновление запускается только кнопкой.</p>
+<form id="otaForm">
+<div class="formfield"><label for="otaTarget">1. Какое устройство обновить?</label>
+<select id="otaTarget" required><option value="">Загрузка списка устройств...</option></select></div>
+<div class="formfield"><label for="otaFirmware">2. Выберите прошивку (.bin или ZIP релиза)</label>
+<input id="otaFirmware" type="file" accept=".bin,.zip,application/zip,application/octet-stream" required></div>
+<button type="submit" id="otaInstall" disabled>Обновить</button>
+<button type="button" id="otaCancel" class="secondary" hidden>Остановить передачу</button>
 </form>
-<p id="otaChip" class="sub">Определение модели шлюза...</p>
+<p class="sub" id="otaFileInfo" aria-live="polite">Выберите устройство и файл. Для старых узлов без OTA1 требуется первоначальная прошивка через USB.</p>
+<progress id="otaProgressBar" value="0" max="100" style="width:100%;height:14px"></progress>
 <p id="otaProgress" class="sub" role="status">Обновление не запускалось.</p>
-<p class="sub">После загрузки и проверки ESP32 перезагрузится. При неудачном запуске механизм загрузчика может откатить обновление. Сохраните резервную копию перед обновлением.</p>
-</section>
-<section class="panel" id="nodeOta" hidden>
-<h2>Обновление выбранного Mesh-узла</h2>
-<p class="sub">Выберите узел с поддержкой OTA1 и файл <code>onoff_server.bin</code> из Web-OTA/Nodes. Шлюз по BLE Mesh пересылает блоки с подтверждениями. Передача может быть длительной; не закрывайте вкладку до окончания. Другие узлы не обновляются.</p>
-<form id="nodeOtaForm">
-<div class="formfield"><label for="nodeOtaDevice">Устройство</label><select id="nodeOtaDevice" required><option value="">Выберите узел в сети</option></select></div>
-<div class="formfield"><label for="nodeOtaFirmware">Прошивка узла (.bin)</label><input type="file" id="nodeOtaFirmware" accept=".bin" required></div>
-<button id="nodeOtaButton" type="submit">Обновить узел</button><button id="nodeOtaCancel" class="secondary" type="button" hidden>Отмена передачи</button>
-</form>
-<progress id="nodeOtaProgressBar" value="0" max="100" style="width:100%;height:14px"></progress>
-<p class="sub" id="nodeOtaProgress" role="status">Обновление не запускалось.</p>
-<p class="sub">Для старого узла без OTA1 требуется одно начальное обновление по USB. Незавершённый OTA-образ не запускается, Mesh-ключи и NVS не удаляются.</p>
+<p class="sub">Шлюз обновляется через Wi-Fi; узел — через BLE Mesh, поэтому значительно медленнее. При обновлении не стираются NVS, Wi-Fi и Mesh-ключи. Отключать питание нельзя. Обновление каждого устройства выполняется отдельно.</p>
 </section>
 <section class="panel">
 <h2>Радиосвязь и индикация</h2>
@@ -158,6 +148,8 @@ let updateBusy=false;
 let uploadingOta=false;
 let uploadingNodeOta=false;
 let nodeOtaCancelled=false;
+let preparedOta=null;
+let otaPreparationId=0;
 const $=id=>document.getElementById(id);
 $('secret').value=token;
 function message(s){$('message').textContent=s;$('firstAdminMessage').textContent=s;}
@@ -182,8 +174,7 @@ async function bootstrapAdmin(){
      $('secret').value='';
      $('wifiSetup').hidden=true;
      $('adminChange').hidden=true;
- $('gatewayOta').hidden=true;
- $('nodeOta').hidden=true;
+ $('otaPanel').hidden=true;
      $('meshScanStatus').textContent='Сначала создайте администратора.';
      $('connection').textContent='Нужно создать администратора';
      $('connection').className='badge warn';
@@ -199,8 +190,7 @@ function invalidateAuth(reason){
  $('secret').value='';
  $('wifiSetup').hidden=true;
  $('adminChange').hidden=true;
- $('gatewayOta').hidden=true;
- $('nodeOta').hidden=true;
+ $('otaPanel').hidden=true;
  $('authPanel').hidden=false;
  $('logout').hidden=true;
  $('scanMesh').disabled=true;
@@ -254,10 +244,7 @@ async function update(){
    'Поиск Mesh доступен после подключения шлюза к роутеру.':
    'BLE Mesh обнаруживает узлы автоматически. Нажмите для обновления списка.';
  $('adminChange').hidden=false;
- $('gatewayOta').hidden=!state.host_ota_ready;
- $('nodeOta').hidden=!state.mesh_ota_ready;
- $('otaChip').textContent='Модель шлюза: '+(state.chip||'не определена')+
-  '. Выберите файл шлюза для этой модели; контроллер также проверит заголовок прошивки.';
+ $('otaPanel').hidden=!state.host_ota_ready && !state.mesh_ota_ready;
  $('ssid').textContent=state.ssid;
  $('webAddress').textContent=state.ip;
  $('wifiSetup').hidden=false;
@@ -267,19 +254,37 @@ async function update(){
  if(!state.setup_mode && !$('routerSsid').value) $('routerSsid').value=state.ssid;
  $('connection').textContent=state.setup_mode?'Режим настройки Wi-Fi':'Шлюз доступен';
  const nodes=list.devices||[];
- const chooser=$('nodeOtaDevice'), previousSelection=chooser.value;
- chooser.replaceChildren(new Option('Выберите узел в сети',''));
+ const chooser=$('otaTarget'), previousSelection=chooser.value;
+ const hostChip=state.chip==='ESP32-C3'?'C3':state.chip==='ESP32-S3'?'S3':'';
+ const gateway=new Option('Шлюз · '+(state.chip||'чип неизвестен')+
+     ' · '+(state.version||'версия неизвестна'),'gateway');
+ gateway.dataset.chip=hostChip;
+ gateway.dataset.role='gateway';
+ gateway.disabled=!state.host_ota_ready||!hostChip;
+ chooser.replaceChildren(gateway);
  for(const n of nodes) {
-   if(!n.address)continue;
+   if(!n.address || n.state==='removing')continue;
    const v=n.firmware_version||'Версия неизвестна';
    const chip=v.includes(' C3 ')?'C3':v.includes(' S3 ')?'S3':'';
-   const item=new Option((n.name||'ESP32 без имени')+' · '+v,String(n.address));
-   item.disabled=!n.online || !chip || !v.includes(' OTA1 ');
+   const item=new Option('Узел: '+(n.name||'ESP32 без имени')+' · '+v+
+      ((!n.online||!chip||!v.includes(' OTA1 '))?' (нужен USB)':''),
+      'node:'+n.address);
+   item.disabled=!state.mesh_ota_ready||!n.online||!chip||!v.includes(' OTA1 ');
    item.dataset.chip=chip;
+   item.dataset.role='node';
+   item.dataset.address=String(n.address);
    chooser.add(item);
  }
- if([...chooser.options].some(o=>o.value===previousSelection && !o.disabled))
-   chooser.value=previousSelection;
+ // Never silently switch a selected offline node to the gateway.
+ const oldChoice=[...chooser.options].find(o=>o.value===previousSelection);
+ if(oldChoice)chooser.value=previousSelection;
+ else if(previousSelection && previousSelection.startsWith('node:')){
+   const missing=new Option('Ранее выбранный узел больше не доступен',previousSelection);
+   missing.disabled=true;
+   chooser.add(missing);chooser.value=previousSelection;
+ }
+ if(previousSelection!==chooser.value || chooser.selectedOptions[0]?.disabled)
+   prepareOtaFile();
  $('found').textContent=nodes.length;
  $('live').textContent=nodes.filter(n=>n.online).length;
  $('waiting').textContent=nodes.filter(n=>n.state==='pending').length;
@@ -517,42 +522,194 @@ async function sha256Hex(bytes){
  }
  return sha256Portable(bytes);
 }
-$('nodeOtaCancel').addEventListener('click',()=>{
+// Inspect ESP-IDF APP images before writing anything to Flash.
+// The ESP image header is 24 bytes, the first segment header 8 bytes,
+// and esp_app_desc_t begins at byte 32 (see Espressif image-format docs).
+function parseOtaImage(bytes){
+ if(bytes.length<512||bytes.length>0x1c0000)
+   throw Error('Размер приложения должен быть от 512 байт до 1,75 МБ.');
+ const d=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+ if(bytes[0]!==0xe9||d.getUint32(32,true)!==0xabcd5432)
+   throw Error('Это не приложение ESP-IDF (.bin). Выберите прошивку из Web-OTA.');
+ const chip=({5:'C3',9:'S3'})[d.getUint16(12,true)];
+ if(!chip)throw Error('Поддерживаются только прошивки ESP32-C3 и ESP32-S3.');
+ function ascii(start,size){
+   let end=start;
+   while(end<start+size && bytes[end]!==0){
+     if(bytes[end]<32||bytes[end]>126)
+       throw Error('Повреждены сведения о прошивке.');
+     end++;
+   }
+   return new TextDecoder().decode(bytes.subarray(start,end));
+ }
+ const version=ascii(48,32);
+ const project=ascii(80,32);
+ if(!version||!['provisioner','onoff_server'].includes(project))
+   throw Error('Файл не относится к шлюзу или узлу AutoMesh.');
+ return {chip,project,version};
+}
+// Accept either the standalone APP .bin or the ZIP published by GitHub.
+// Only the one exact image for the selected device is unpacked from ZIP.
+async function unzipOtaImage(archive,option){
+ if(archive.size>40*1024*1024)throw Error('Архив слишком большой (макс. 40 МБ).');
+ const buffer=await archive.arrayBuffer(),bytes=new Uint8Array(buffer),v=new DataView(buffer);
+ let eocd=-1;
+ for(let p=bytes.length-22;p>=Math.max(0,bytes.length-65557);p--){
+   if(v.getUint32(p,true)===0x06054b50 &&
+      p+22+v.getUint16(p+20,true)===bytes.length){eocd=p;break;}
+ }
+ if(eocd<0)throw Error('ZIP повреждён или имеет неподдерживаемый формат.');
+ const total=v.getUint16(eocd+10,true),directory=v.getUint32(eocd+16,true);
+ const directoryLength=v.getUint32(eocd+12,true);
+ if(total>1000||directory+directoryLength>bytes.length)
+   throw Error('Недопустимый каталог архива ZIP.');
+ const chip=option.dataset.chip;
+ const wanted=option.dataset.role==='gateway'?
+   (chip==='C3'?'Web-OTA/gateway-esp32c3-provisioner.bin':
+                  'Web-OTA/gateway-esp32s3-zero-provisioner.bin'):
+   (chip==='C3'?'Web-OTA/Nodes/node-esp32c3-onoff_server.bin':
+                  'Web-OTA/Nodes/node-esp32s3-zero-onoff_server.bin');
+ let pointer=directory,entry=null;
+ for(let i=0;i<total;i++){
+   if(pointer+46>bytes.length||v.getUint32(pointer,true)!==0x02014b50)
+     throw Error('Каталог ZIP повреждён.');
+   const method=v.getUint16(pointer+10,true);
+   const compressed=v.getUint32(pointer+20,true);
+   const uncompressed=v.getUint32(pointer+24,true);
+   const nameLength=v.getUint16(pointer+28,true);
+   const extraLength=v.getUint16(pointer+30,true);
+   const commentLength=v.getUint16(pointer+32,true);
+   const local=v.getUint32(pointer+42,true);
+   if(pointer+46+nameLength+extraLength+commentLength>bytes.length)
+     throw Error('Запись каталога ZIP выходит за границы файла.');
+   const name=new TextDecoder().decode(bytes.subarray(pointer+46,pointer+46+nameLength)).replace(/\\/g,'/');
+   if(name.toLowerCase()===wanted.toLowerCase() ||
+      name.toLowerCase().endsWith('/'+wanted.toLowerCase())){
+     if(entry)throw Error('В архиве найдены дублирующиеся прошивки.');
+     entry={name,method,compressed,uncompressed,local};
+   }
+   pointer+=46+nameLength+extraLength+commentLength;
+ }
+ if(!entry)throw Error('В ZIP нет прошивки для выбранного устройства: '+wanted);
+ if(entry.uncompressed<512||entry.uncompressed>0x1c0000 ||
+    entry.local+30>bytes.length||v.getUint32(entry.local,true)!==0x04034b50)
+   throw Error('Недопустимый размер или заголовок прошивки в ZIP.');
+ const localName=v.getUint16(entry.local+26,true),localExtra=v.getUint16(entry.local+28,true);
+ const start=entry.local+30+localName+localExtra;
+ if(start+entry.compressed>bytes.length)
+   throw Error('Данные прошивки выходят за границы ZIP.');
+ const payload=bytes.subarray(start,start+entry.compressed);
+ let output;
+ if(entry.method===0)output=new Uint8Array(payload);
+ else if(entry.method===8){
+   if(typeof DecompressionStream==='undefined')
+     throw Error('Браузер не поддерживает ZIP. Выберите отдельный .bin из Web-OTA.');
+   try{
+     const decoded=new Blob([payload]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+     output=new Uint8Array(await new Response(decoded).arrayBuffer());
+   }catch(e){throw Error('Не удалось распаковать ZIP. Выберите отдельный .bin из Web-OTA.');}
+ }else throw Error('Неподдерживаемое сжатие ZIP. Выберите отдельный .bin.');
+ if(output.length!==entry.uncompressed)
+   throw Error('Размер распакованной прошивки не совпадает с ZIP.');
+ return {bytes:output,source:entry.name};
+}
+function verifyOtaTarget(image,option){
+ if(!option||option.disabled||!option.value)
+   throw Error('Устройство недоступно для веб-обновления.');
+ if(image.chip!==option.dataset.chip)
+   throw Error('Несовместимый чип: файл '+image.chip+', устройство '+option.dataset.chip+'.');
+ const requiredProject=option.dataset.role==='gateway'?'provisioner':'onoff_server';
+ if(image.project!==requiredProject)
+   throw Error('Несовместимая роль: нужен файл '+
+     (option.dataset.role==='gateway'?'шлюза':'узла')+', выбран другой образ.');
+}
+async function prepareOtaFile(){
+ const seq=++otaPreparationId;
+ preparedOta=null;
+ $('otaInstall').disabled=true;
+ const file=$('otaFirmware').files[0],option=$('otaTarget').selectedOptions[0];
+ if(!file||!option||option.disabled){
+   $('otaFileInfo').textContent='Выберите доступное устройство и .bin или ZIP релиза.';
+   return;
+ }
+ $('otaFileInfo').textContent='Проверяю файл для выбранного устройства...';
+ try{
+   let selected;
+   if(/\.zip$/i.test(file.name))selected=await unzipOtaImage(file,option);
+   else if(/\.bin$/i.test(file.name)){
+     if(file.size>0x1c0000)throw Error('Файл слишком большой для OTA.');
+     selected={bytes:new Uint8Array(await file.arrayBuffer()),source:file.name};
+   }else throw Error('Выберите .bin или .zip из GitHub Releases.');
+   const info=parseOtaImage(selected.bytes);
+   verifyOtaTarget(info,option);
+   if(seq!==otaPreparationId)return;
+   preparedOta={...selected,...info,target:option.value,file};
+   $('otaFileInfo').textContent='Подходит: '+(info.project==='provisioner'?'шлюз':'узел')+
+      ' ESP32-'+info.chip+' · версия '+info.version+
+      ' · '+selected.source+' · '+(selected.bytes.length/1024).toFixed(0)+' КБ.';
+   $('otaInstall').disabled=false;
+ }catch(err){
+   if(seq!==otaPreparationId)return;
+   $('otaFileInfo').textContent='Не подходит: '+err.message;
+ }
+}
+$('otaTarget').addEventListener('change',prepareOtaFile);
+$('otaFirmware').addEventListener('change',prepareOtaFile);
+$('otaCancel').addEventListener('click',()=>{
  nodeOtaCancelled=true;
- $('nodeOtaCancel').disabled=true;
- $('nodeOtaProgress').textContent='Остановка после текущего блока...';
+ $('otaCancel').disabled=true;
+ $('otaProgress').textContent='Останавливаю передачу после текущего блока...';
 });
-$('nodeOtaForm').addEventListener('submit',async e=>{
- e.preventDefault();
- if(uploadingNodeOta||!token)return;
- const opt=$('nodeOtaDevice').selectedOptions[0],file=$('nodeOtaFirmware').files[0];
- if(!opt||opt.disabled||!opt.value||!file)return;
- const address=Number(opt.value),chip=opt.dataset.chip;
- if(!['C3','S3'].includes(chip) ||
-    !Number.isInteger(address)||address<2||address>=32768){
-   $('nodeOtaProgress').textContent='Не удалось определить совместимый узел.';return;
- }
- if(!/onoff_server.*\.bin$/i.test(file.name) ||
-    file.size<512||file.size>0x1c0000) {
-   $('nodeOtaProgress').textContent='Нужен бинарный файл узла onoff_server.bin (не более 1,75 МБ).';return;
- }
- if((chip==='C3'&&/esp32s3|s3-zero/i.test(file.name)) ||
-    (chip==='S3'&&/esp32c3/i.test(file.name))){
-   $('nodeOtaProgress').textContent='Файл прошивки предназначен для другого чипа.';return;
- }
- if(!confirm('Обновить ТОЛЬКО выбранный Mesh-узел '+opt.textContent+
-             '? Длительная передача; после проверки узел перезагрузится.'))return;
- uploadingNodeOta=true;nodeOtaCancelled=false;
- $('nodeOtaButton').disabled=true;
- $('nodeOtaCancel').hidden=false;$('nodeOtaCancel').disabled=false;
- const progress=$('nodeOtaProgress'),bar=$('nodeOtaProgressBar');bar.value=0;
+function otaBusy(active,isNode){
+ uploadingOta=active&&!isNode;
+ uploadingNodeOta=active&&isNode;
+ $('otaTarget').disabled=active;
+ $('otaFirmware').disabled=active;
+ $('otaInstall').disabled=active;
+ $('otaCancel').hidden=!active||!isNode;
+ $('otaCancel').disabled=!active;
+}
+async function uploadGatewayImage(bytes,digest){
+ const progress=$('otaProgress'),bar=$('otaProgressBar');
+ progress.textContent='Отправляю файл на шлюз...';
+ return new Promise((resolve,reject)=>{
+   const xhr=new XMLHttpRequest();
+   xhr.open('POST','/api/ota/gateway');
+   xhr.setRequestHeader('X-Automesh-Admin',token);
+   xhr.setRequestHeader('Content-Type','application/octet-stream');
+   xhr.setRequestHeader('X-Image-SHA256',digest);
+   xhr.timeout=120000;
+   xhr.upload.onprogress=e=>{
+     if(e.lengthComputable){
+       bar.value=Math.floor(100*e.loaded/e.total);
+       progress.textContent='Шлюз: '+bar.value+'%. Проверка прошивки после загрузки.';
+     }
+   };
+   xhr.onload=()=>{
+     if(xhr.status===200){
+       bar.value=100;
+       resolve();
+     }else{
+       if(xhr.status===401||xhr.status===429)
+         invalidateAuth('Ошибка авторизации при обновлении шлюза: HTTP '+xhr.status);
+       reject(Error('Шлюз отклонил файл: HTTP '+xhr.status+
+                    ' '+xhr.responseText.slice(0,160)));
+     }
+   };
+   xhr.onerror=()=>reject(Error('Соединение потеряно. Проверьте версию после восстановления Wi-Fi.'));
+   xhr.ontimeout=()=>reject(Error('Нет ответа шлюза. Проверьте установленную версию.'));
+   try{xhr.send(new Blob([bytes],{type:'application/octet-stream'}));}
+   catch(e){reject(e);}
+ });
+}
+async function uploadNodeImage(option,bytes,digest){
+ const address=Number(option.dataset.address),chip=option.dataset.chip;
+ if(!Number.isInteger(address)||address<2||address>=32768 ||
+    !['C3','S3'].includes(chip))throw Error('Некорректный адрес узла.');
+ const progress=$('otaProgress'),bar=$('otaProgressBar');
  let started=false;
- try {
-   progress.textContent='Читаю файл и вычисляю SHA-256...';
-   const bytes=new Uint8Array(await file.arrayBuffer());
-   const digest=await sha256Hex(bytes);
-   if(nodeOtaCancelled)throw Error('Отменено');
-   progress.textContent='Ожидаю подтверждения узла для начала OTA...';
+ try{
+   progress.textContent='Запрашиваю начало OTA у узла...';
    await api('/api/ota/node/start','POST',{address,chip,size:bytes.length,sha256:digest});
    started=true;
    for(let offset=0;offset<bytes.length;offset+=96){
@@ -560,7 +717,7 @@ $('nodeOtaForm').addEventListener('submit',async e=>{
      const block=bytes.subarray(offset,Math.min(bytes.length,offset+96));
      let ok=false,reason='';
      for(let attempt=0;attempt<3&&!ok;attempt++){
-       try {
+       try{
          const response=await fetch('/api/ota/node/chunk',{
            method:'POST',cache:'no-store',
            headers:{'X-Automesh-Admin':token,'X-OTA-Offset':String(offset),
@@ -568,94 +725,65 @@ $('nodeOtaForm').addEventListener('submit',async e=>{
            body:block
          });
          if(response.status===401||response.status===429){
-           invalidateAuth('Авторизация завершилась во время OTA');throw Error('Авторизация шлюза завершилась');
+           invalidateAuth('Доступ к шлюзу завершился во время OTA');
+           throw Error('Потеряна авторизация');
          }
          if(!response.ok)throw Error('HTTP '+response.status);
          const ack=await response.json();
-         if(ack.offset!==offset+block.length)throw Error('Несовпадение смещения Mesh ACK');
+         if(ack.offset!==offset+block.length)throw Error('Неверный ответ узла');
          ok=true;
-       }catch(err){reason=err.message;}
+       }catch(e){reason=e.message;}
      }
      if(!ok)throw Error('Ошибка передачи блока '+offset+': '+reason);
      if(offset%1536===0||offset+block.length===bytes.length){
        const pct=Math.floor((offset+block.length)*100/bytes.length);
        bar.value=pct;
-       progress.textContent='Узел '+address+': '+pct+'% ('+
-         (offset+block.length)+' / '+bytes.length+' байт). Не закрывайте страницу.';
+       progress.textContent='Узел: '+pct+'% ('+(offset+block.length)+' / '+
+           bytes.length+' байт). Не закрывайте страницу.';
      }
    }
-   progress.textContent='Узел получил файл. Проверяю SHA-256 и приложение...';
+   progress.textContent='Проверяю SHA-256 на узле и завершаю OTA...';
    await api('/api/ota/node/finish','POST',{});
-   started=false;bar.value=100;
-   progress.textContent='Готово: узел подтвердил OTA, выполняет перезапуск. Проверьте версию после связи с Mesh.';
+   started=false;
+   bar.value=100;
+ }catch(e){
+   if(started)try{await api('/api/ota/node/abort','POST',{});}catch(_){}
+   throw e;
+ }
+}
+$('otaForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ if(uploadingOta||uploadingNodeOta||!token)return;
+ const current=$('otaTarget').selectedOptions[0];
+ const selected=preparedOta;
+ if(!selected||!current||current.value!==selected.target||
+    $('otaFirmware').files[0]!==selected.file){
+   $('otaProgress').textContent='Сначала выберите совместимую прошивку.';
+   return;
+ }
+ try{verifyOtaTarget(selected,current);}
+ catch(err){$('otaProgress').textContent=err.message;return;}
+ // The button press is the only user confirmation; no extra prompt.
+ const isNode=current.dataset.role==='node';
+ const progress=$('otaProgress'),bar=$('otaProgressBar');
+ bar.value=0;
+ nodeOtaCancelled=false;
+ otaBusy(true,isNode);
+ try{
+   progress.textContent='Вычисляю SHA-256 и проверяю файл...';
+   const digest=await sha256Hex(selected.bytes);
+   if(isNode)await uploadNodeImage(current,selected.bytes,digest);
+   else await uploadGatewayImage(selected.bytes,digest);
+   progress.textContent=isNode?
+      'Передача и проверка завершены. Узел перезагружается; версия обновится после появления в Mesh.':
+      'Файл проверен. Шлюз перезагружается; откройте страницу после восстановления Wi-Fi.';
  }catch(err){
    progress.textContent='Обновление не завершено: '+err.message+
-     '. Текущая прошивка узла остаётся активной до успешной проверки.';
-   if(started)try{await api('/api/ota/node/abort','POST',{});}catch(_){}
+     '. Не отключайте питание; проверьте установленную версию.';
  }finally{
-   uploadingNodeOta=false;
-   $('nodeOtaButton').disabled=false;
-   $('nodeOtaCancel').hidden=true;
-   update();
+   otaBusy(false,false);
+   if(token)update();
  }
-});
-
-$('gatewayOtaForm').addEventListener('submit',async e=>{
- e.preventDefault();
- if(uploadingOta)return;
- if(!token){message('Сначала войдите в шлюз.');return;}
- const file=$('otaFirmware').files[0];
- if(!file){message('Выберите файл provisioner.bin');return;}
- if(!/\.bin$/i.test(file.name)||!/provisioner|application/i.test(file.name)){
-   $('otaProgress').textContent='Выбран не файл приложения шлюза. Используйте provisioner.bin.';
-   return;
- }
- if(file.size<512 || file.size>0x1C0000){
-   $('otaProgress').textContent='Недопустимый размер файла для OTA (макс. 1,75 МБ).';
-   return;
- }
- let expected=$('otaSha').value.trim();
- if(expected && !/^[0-9a-f]{64}$/i.test(expected)){
-   $('otaProgress').textContent='SHA-256 должен состоять из 64 шестнадцатеричных символов.';
-   return;
- }
- if(!confirm('Обновить ТОЛЬКО шлюз '+$('webAddress').textContent+'? Устройство перезагрузится, настройки NVS сохранятся.')){
-   return;
- }
- uploadingOta=true;
- $('otaUploadButton').disabled=true;
- $('otaProgress').textContent='Загрузка файла на шлюз...';
- const xhr=new XMLHttpRequest();
- xhr.open('POST','/api/ota/gateway');
- xhr.setRequestHeader('X-Automesh-Admin',token);
- xhr.setRequestHeader('Content-Type','application/octet-stream');
- if(expected)xhr.setRequestHeader('X-Image-SHA256',expected.toLowerCase());
- xhr.upload.onprogress=ev=>{
-   if(ev.lengthComputable){
-     $('otaProgress').textContent='Отправка прошивки: '+Math.floor(100*ev.loaded/ev.total)+'%. Ожидайте проверки ESP32.';
-   }
- };
- xhr.onerror=()=>finish('Сеть потеряна во время передачи. Проверьте версию шлюза после подключения.');
- xhr.ontimeout=()=>finish('Время ожидания превышено. Проверьте состояние шлюза.');
- xhr.onload=()=>{
-   if(xhr.status===200){
-     $('otaProgress').textContent='Прошивка проверена и установлена в резервный раздел. Шлюз перезагружается — обновите страницу после восстановления Wi-Fi.';
-     uploadingOta=false;
-     $('otaUploadButton').disabled=false;
-     return;
-   }
-   if(xhr.status===401||xhr.status===429){
-     invalidateAuth('Ошибка авторизации при OTA: HTTP '+xhr.status);
-   }
-   finish('Шлюз отклонил прошивку (HTTP '+xhr.status+'): '+xhr.responseText.slice(0,180));
- };
- function finish(reason){
-   uploadingOta=false;
-   $('otaUploadButton').disabled=false;
-   $('otaProgress').textContent=reason;
- }
- try{xhr.timeout=120000;xhr.send(file);}
- catch(err){finish('Ошибка отправки: '+err.message);}
 });
 
 $('wifiForm').addEventListener('submit',async e=>{

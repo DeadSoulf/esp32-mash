@@ -49,15 +49,12 @@ small{color:#9eb4c8}
 @media(max-width:680px){header{align-items:flex-start;flex-direction:column}.overview{grid-template-columns:1fr}body{padding:14px}h1{font-size:24px}}
 
 /* Live, RAM-only BLE Mesh topology. No external JS libraries or services. */
-.mesh-tabs,.mesh-actions,.mesh-legend{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0}
-.mesh-tabs button[aria-selected="true"]{border-color:#58a6e8;background:#174366}
-#meshSvg{display:block;width:100%;height:430px;border:1px solid #38536b;border-radius:12px;background:#101f30;touch-action:none;cursor:grab}
+[hidden]{display:none!important}
+.mesh-tabs{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0}
+.mesh-tabs button[aria-selected="true"]{outline:2px solid #58a6e8;background:#174366}
+.mesh-map-shell{padding:0;overflow:hidden}
+#meshSvg{display:block;width:100%;height:70vh;min-height:430px;max-height:750px;background:#101f30;touch-action:none;cursor:grab}
 #meshSvg:active{cursor:grabbing}
-.mesh-legend span{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:#b6c8d8}
-.mesh-key{display:inline-block;width:24px;border-top:3px solid #42aa87}
-.mesh-key.medium{border-color:#d3a044}
-.mesh-key.weak{border-color:#d87575}
-.mesh-key.oneway{border-top-style:dashed;border-color:#91a1b2}
 </style>
 </head>
 <body>
@@ -88,16 +85,18 @@ small{color:#9eb4c8}
 </section>
 
 
+<nav class="mesh-tabs" id="meshTabs" role="tablist" aria-label="Разделы шлюза" hidden>
+<button type="button" id="showDevices" role="tab" aria-controls="devicesTab" aria-selected="true">Устройства</button>
+<button type="button" id="showMeshMap" role="tab" aria-controls="meshMapPanel" aria-selected="false">Карта Mesh</button>
+<button type="button" id="showSettings" role="tab" aria-controls="settingsTab" aria-selected="false">Настройки</button>
+</nav>
+<div id="devicesTab" role="tabpanel" aria-labelledby="showDevices" hidden>
 <div class="overview">
 <div class="metric"><span class="sub">Обнаружено</span><strong id="found">—</strong></div>
 <div class="metric"><span class="sub">В сети</span><strong id="live">—</strong></div>
 <div class="metric"><span class="sub">Ожидают допуска</span><strong id="waiting">—</strong></div>
 </div>
-<div class="mesh-tabs" id="meshTabs" role="tablist" aria-label="Вид сети" hidden>
-<button type="button" id="showDevices" role="tab" aria-controls="devicesPanel" aria-selected="true">Устройства</button>
-<button type="button" id="showMeshMap" role="tab" aria-controls="meshMapPanel" aria-selected="false">Карта Mesh</button>
-</div>
-<section class="panel" id="devicesPanel" role="tabpanel">
+<section class="panel" id="devicesPanel">
 <h2>Устройства</h2>
 <div class="wifi-search"><button id="scanMesh" type="button" class="secondary" disabled>Поиск новых устройств</button><span class="sub" id="meshScanStatus" role="status">Войдите в панель для поиска устройств.</span></div>
 <p class="sub">«Найти» запускает быстрое мигание выбранного узла на 15 секунд. Результат показывается после подтверждения устройства. Кнопка «Имя» сохраняет название, которое останется после перезагрузки.</p>
@@ -105,26 +104,6 @@ small{color:#9eb4c8}
 <thead><tr><th>Устройство</th><th>Адрес Mesh</th><th>Состояние</th><th>Прошивка</th><th>Управление</th></tr></thead>
 <tbody id="devices"><tr><td colspan="5" class="sub">Введите ключ администратора</td></tr></tbody>
 </table></div>
-</section>
-<section class="panel" id="meshMapPanel" role="tabpanel" hidden>
-<h2>Карта Mesh</h2>
-<p class="sub">Реальные радиососеди по коротким Bluetooth-маякам TTL=1. Линии показывают наблюдаемую связь, а не фиксированный путь маршрутизации. Данные обновляются примерно раз в минуту; старые измерения пропадают.</p>
-<div class="mesh-actions">
-<button type="button" class="secondary" id="meshMapRefresh">Обновить данные</button>
-<button type="button" class="secondary" id="meshMapZoomIn" aria-label="Приблизить карту">+</button>
-<button type="button" class="secondary" id="meshMapZoomOut" aria-label="Отдалить карту">−</button>
-<button type="button" class="secondary" id="meshMapReset">Сбросить вид</button>
-</div>
-<div class="mesh-legend">
-<span><i class="mesh-key"></i> Хорошая связь</span>
-<span><i class="mesh-key medium"></i> Средняя</span>
-<span><i class="mesh-key weak"></i> Слабая</span>
-<span><i class="mesh-key oneway"></i> Подтверждена одной стороной</span>
-</div>
-<svg id="meshSvg" viewBox="0 0 900 430" role="img" aria-label="Карта зарегистрированных узлов и прямых радиососедей">
-<g id="meshScene"></g></svg>
-<p class="sub" id="meshMapStatus" role="status">Ожидаю измерений от зарегистрированных устройств.</p>
-<p class="sub">Перетаскивайте узлы мышью или пальцем. Колёсико и кнопки +/− меняют масштаб; свободное место позволяет сдвигать карту. Узлы со старой прошивкой не показывают радиососедей до обновления. Положения не сохраняются.</p>
 </section>
 <section class="panel" id="otaPanel" hidden>
 <h2>Обновление прошивки</h2>
@@ -142,14 +121,17 @@ small{color:#9eb4c8}
 <p id="otaProgress" class="sub" role="status">Обновление не запускалось.</p>
 <p class="sub">Шлюз обновляется через Wi-Fi; узел — через BLE Mesh, поэтому значительно медленнее. При обновлении не стираются NVS, Wi-Fi и Mesh-ключи. Отключать питание нельзя. Обновление каждого устройства выполняется отдельно.</p>
 </section>
-<section class="panel">
-<h2>Радиосвязь и индикация</h2>
-<p class="sub">Узлы получают контрольный запрос от шлюза. При ответе светодиод горит; если ответа нет 35 секунд — мигает. Шлюз работает по Wi-Fi для веб-панели, а ESP32 общаются друг с другом через BLE Mesh.</p>
-<p class="sub">Wi-Fi шлюза: <strong id="ssid">—</strong>. Адрес страницы: <strong id="webAddress">192.168.4.1</strong>.</p>
-</section>
 <small>Локальная тестовая панель. Для удалённого доступа через интернет потребуется отдельный защищённый мост. Секреты регистрации и сети не отображаются в таблице.</small>
-<section id="wifiSetup" class="panel" hidden>
+
+</div>
+<section class="panel mesh-map-shell" id="meshMapPanel" role="tabpanel" aria-labelledby="showMeshMap" hidden>
+<svg id="meshSvg" viewBox="0 0 900 430" role="img" aria-label="Карта Bluetooth Mesh: перетаскивайте узлы, колёсико — масштаб, двойной щелчок — сброс.">
+<g id="meshScene"></g></svg>
+</section>
+<div id="settingsTab" role="tabpanel" aria-labelledby="showSettings" hidden>
+<section id="wifiSetup" class="panel">
 <h2>Настройки Wi-Fi шлюза</h2>
+<p class="sub">Текущая сеть: <strong id="ssid">—</strong>. IP-адрес шлюза: <strong id="webAddress">—</strong>.</p>
 <p id="wifiModeNote" class="sub">Поиск доступных сетей, выбор роутера и смена Wi-Fi подключения. Во время поиска связь Bluetooth Mesh может ненадолго замедлиться.</p>
 <div class="wifi-search">
 <button type="button" id="scanWifi" class="secondary">Сканировать Wi-Fi</button>
@@ -165,7 +147,7 @@ small{color:#9eb4c8}
 </form>
 <p class="sub">После выбора другой Wi-Fi сети шлюз перезагрузится. Если подключение не удастся, прежние настройки автоматически восстановятся примерно через 45 секунд. Новый IP-адрес появится в USB-журнале.</p>
 </section>
-<section id="adminChange" class="panel" hidden>
+<section id="adminChange" class="panel">
 <h2>Сменить ключ администратора</h2>
 <form id="changeAdminForm">
 <div class="formfield"><label for="changeAdminKey">Новый ключ (не менее 6 символов)</label>
@@ -175,6 +157,8 @@ small{color:#9eb4c8}
 <button type="submit">Сохранить новый ключ</button>
 </form>
 </section>
+<p id="settingsMessage" class="msg" role="status"></p>
+</div>
 </main>
 <script>
 'use strict';
@@ -187,6 +171,7 @@ let nodeOtaCancelled=false;
 let preparedOta=null;
 let otaPreparationId=0;
 let activeMeshTab='devices';
+let settingsSetupShown=false;
 let meshMapDevices=[];
 let meshMapLinks=[];
 let meshMapLastFetch=0;
@@ -197,12 +182,37 @@ let meshMapPan={x:0,y:0};
 let meshMapDragging=null;
 const $=id=>document.getElementById(id);
 $('secret').value=token;
-function message(s){$('message').textContent=s;$('firstAdminMessage').textContent=s;}
+function message(s){
+ $('message').textContent=s;
+ $('firstAdminMessage').textContent=s;
+ $('settingsMessage').textContent=s;
+}
 function validAdminKey(s){
  return Array.from(s).length>=6 &&
    Array.from(s).length<=64 &&
    new TextEncoder().encode(s).length<=64 &&
    !/[\u0000-\u001f\u007f]/.test(s);
+}
+// Hide all authenticated pages on logout and before the administrator
+// credentials have been checked by the gateway API.
+function hideMainTabs(){
+ $('meshTabs').hidden=true;
+ $('devicesTab').hidden=true;
+ $('meshMapPanel').hidden=true;
+ $('settingsTab').hidden=true;
+}
+function applyMeshTabs(){
+ if($('meshTabs').hidden)return;
+ $('devicesTab').hidden=activeMeshTab!=='devices';
+ $('meshMapPanel').hidden=activeMeshTab!=='map';
+ $('settingsTab').hidden=activeMeshTab!=='settings';
+ for(const [id,tab] of [['showDevices','devices'],
+                        ['showMeshMap','map'],
+                        ['showSettings','settings']]){
+   const element=$(id), selected=activeMeshTab===tab;
+   element.setAttribute('aria-selected',String(selected));
+   element.tabIndex=selected?0:-1;
+ }
 }
 async function bootstrapAdmin(){
  try {
@@ -217,12 +227,9 @@ async function bootstrapAdmin(){
      token='';
      sessionStorage.removeItem('automesh_admin');
      $('secret').value='';
-     $('wifiSetup').hidden=true;
-     $('adminChange').hidden=true;
-     $('meshTabs').hidden=true;
-     $('meshMapPanel').hidden=true;
-     $('devicesPanel').hidden=false;
- $('otaPanel').hidden=true;
+     hideMainTabs();
+     activeMeshTab='devices';
+     settingsSetupShown=false;
      $('meshScanStatus').textContent='Сначала создайте администратора.';
      $('connection').textContent='Нужно создать администратора';
      $('connection').className='badge warn';
@@ -236,12 +243,10 @@ function invalidateAuth(reason){
  token='';
  sessionStorage.removeItem('automesh_admin');
  $('secret').value='';
- $('wifiSetup').hidden=true;
- $('adminChange').hidden=true;
- $('meshTabs').hidden=true;
- $('meshMapPanel').hidden=true;
- $('devicesPanel').hidden=false;
- $('otaPanel').hidden=true;
+ hideMainTabs();
+ activeMeshTab='devices';
+ settingsSetupShown=false;
+ meshMapLinks=[];
  $('authPanel').hidden=false;
  $('logout').hidden=true;
  $('scanMesh').disabled=true;
@@ -299,12 +304,17 @@ async function update(){
  if(!meshSearchBusy)$('meshScanStatus').textContent=state.setup_mode?
    'Поиск Mesh доступен после подключения шлюза к роутеру.':
    'BLE Mesh обнаруживает узлы автоматически. Нажмите для обновления списка.';
- $('adminChange').hidden=false;
  $('meshTabs').hidden=false;
+ if(state.setup_mode && !settingsSetupShown){
+   activeMeshTab='settings'; // First boot: Wi-Fi setup must be reachable.
+   settingsSetupShown=true;
+ }else if(!state.setup_mode){
+   settingsSetupShown=false;
+ }
+ applyMeshTabs();
  $('otaPanel').hidden=!state.host_ota_ready && !state.mesh_ota_ready;
  $('ssid').textContent=state.ssid;
  $('webAddress').textContent=state.ip;
- $('wifiSetup').hidden=false;
  $('wifiModeNote').textContent=state.setup_mode?
   'Первоначальная настройка. Поиск Wi-Fi работает без Bluetooth Mesh; выберите роутер, чтобы запустить сеть.':
   'Шлюз подключён к '+state.ssid+'. Здесь можно сканировать сети и сменить Wi-Fi, сохранив автоматическое восстановление при ошибке.';
@@ -576,11 +586,12 @@ function renderMeshMap(){
      ' (0x'+address.toString(16)+') · '+
      (node.firmware_version||'версия неизвестна'));
  });
- $('meshMapStatus').textContent=meshMapError ||
-   ('Устройств: '+addresses.length+' (включая шлюз), связей: '+pairs.size+
-    '. Измерения не старше 210 секунд. '+(pairs.size?
-    'Сплошная линия: наблюдение с двух сторон; пунктир: с одной.':
-    'Связи ещё не измерены — нужны новые прошивки узлов и несколько минут обмена.'));
+ // The map is the only visible content of its tab. Keep diagnostics
+ // available to screen readers without adding a separate information panel.
+ meshSvg.setAttribute('aria-label',meshMapError ||
+   ('Карта Bluetooth Mesh. Устройств: '+addresses.length+
+    ', измеренных связей: '+pairs.size+
+    '. Перетаскивайте узлы, колёсико — масштаб, двойной щелчок — сброс.'));
 }
 let meshMapError='';
 async function refreshMeshData(force=false){
@@ -601,12 +612,10 @@ async function refreshMeshData(force=false){
  }
 }
 function meshShowTab(which){
- if(!token)return;
+ if(!token || $('meshTabs').hidden ||
+    !['devices','map','settings'].includes(which))return;
  activeMeshTab=which;
- $('devicesPanel').hidden=which!=='devices';
- $('meshMapPanel').hidden=which!=='map';
- $('showDevices').setAttribute('aria-selected',String(which==='devices'));
- $('showMeshMap').setAttribute('aria-selected',String(which==='map'));
+ applyMeshTabs();
  if(which==='map'){
    renderMeshMap();
    refreshMeshData(true);
@@ -614,10 +623,12 @@ function meshShowTab(which){
 }
 $('showDevices').addEventListener('click',()=>meshShowTab('devices'));
 $('showMeshMap').addEventListener('click',()=>meshShowTab('map'));
-$('meshMapRefresh').addEventListener('click',()=>refreshMeshData(true));
-$('meshMapZoomIn').addEventListener('click',()=>meshMoveZoom(1.2));
-$('meshMapZoomOut').addEventListener('click',()=>meshMoveZoom(1/1.2));
-$('meshMapReset').addEventListener('click',()=>{
+$('showSettings').addEventListener('click',()=>meshShowTab('settings'));
+// Keep the map clean: use the mouse wheel for zoom and double-click
+// to return to the initial layout, without extra buttons or panels.
+meshSvg.addEventListener('dblclick',event=>{
+ if(activeMeshTab!=='map')return;
+ event.preventDefault();
  meshMapPan={x:0,y:0};meshMapScale=1;meshMapPositions.clear();
  renderMeshMap();
 });

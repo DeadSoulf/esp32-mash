@@ -48,8 +48,7 @@ class MeshMapTests(unittest.TestCase):
         html=source("gateway/main/gateway_index.html")
         for marker in ('id="meshTabs"', 'id="showMeshMap"',
                        'id="meshMapPanel"','id="meshSvg"',
-                       'id="meshMapRefresh"','id="meshMapZoomIn"',
-                       'id="meshMapZoomOut"','id="meshMapReset"',
+                       'id="showSettings"','id="settingsTab"',
                        'function renderMeshMap()', 'meshSvg.addEventListener(\'pointermove\'',
                        "meshSvg.addEventListener('wheel'",
                        "api('/api/mesh/topology')",
@@ -58,18 +57,23 @@ class MeshMapTests(unittest.TestCase):
                        "meshMapPositions.clear()"):
             with self.subTest(marker=marker):
                 self.assertIn(marker,html)
+        # The map is intentionally the only visual content of the tab.
+        for removed in ('meshMapRefresh','meshMapZoomIn','meshMapZoomOut',
+                        'meshMapReset','meshMapStatus'):
+            self.assertNotIn('id="'+removed+'"',html)
+        self.assertIn("meshSvg.addEventListener('dblclick'",html)
         self.assertNotIn('textContent=node.uuid',html)
         self.assertIn("activeMeshTab==='map'",html)
         self.assertIn("const bidirectional=",html)
 
     def test_ci_and_firmware_version_match(self):
         workflow=source(".github/workflows/esp-idf-c3.yml")
-        self.assertIn("AutoMesh-v0.3.17-dev.zip",workflow)
+        self.assertIn("AutoMesh-v0.3.18-dev.zip",workflow)
         for name in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.17-dev")',
+            self.assertIn('set(PROJECT_VER "0.3.18-dev")',
                           source(name+"/CMakeLists.txt"))
         self.assertIn("automesh_topology.c",
                       source("gateway/main/CMakeLists.txt"))
-        self.assertIn("v0.3.17-dev",source("docs/PROJECT-STATE.md"))
+        self.assertIn("v0.3.18-dev",source("docs/PROJECT-STATE.md"))
 
 if __name__=="__main__": unittest.main()

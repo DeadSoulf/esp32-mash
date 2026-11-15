@@ -1235,10 +1235,13 @@ async function uploadNodeImage(option,bytes,digest){
    // missing max_chunk is treated as legacy, never as fast by default.
    const blockBytes=[96,224].includes(Number(session.max_chunk))?
      Number(session.max_chunk):96;
+   const transport=session.transport==='OTA3'&&blockBytes===224?'OTA3':
+                   (blockBytes===224?'OTA2':'OTA1');
    const startTime=performance.now();
    let lastProgressAt=0;
-   progress.textContent='Передаю по BLE Mesh: '+(blockBytes===224?
-     'ускоренный OTA2':'совместимый OTA1')+' ('+blockBytes+' байт/блок).';
+   progress.textContent='Передаю по BLE Mesh: '+transport+
+      (transport==='OTA3'?' (контроль каждых 4 блоков)':' (подтверждение каждого блока)')+
+      ' · '+blockBytes+' байт/блок.';
    // Coalesce four blocks per HTTP request; each Mesh block is still ACKed.
    // Never retry an ambiguous partially completed batch.
    const batchBytes=blockBytes*4;
@@ -1277,7 +1280,7 @@ async function uploadNodeImage(option,bytes,digest){
        bar.value=100*done/bytes.length;
        progress.textContent='Узел: '+pct+'% · '+speed+
            ' байт/с · осталось ~'+timeLeft+
-           ' · '+(blockBytes===224?'OTA2':'OTA1')+
+           ' · '+transport+
            '. Не закрывайте страницу.';
        lastProgressAt=now;
      }

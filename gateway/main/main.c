@@ -869,6 +869,14 @@ esp_err_t automesh_gateway_locate(uint16_t address,uint8_t duration)
 static void automesh_locate_client_cb(esp_ble_mesh_model_cb_event_t event,
                                      esp_ble_mesh_model_cb_param_t *param)
 {
+    if(event==ESP_BLE_MESH_MODEL_SEND_COMP_EVT &&
+       param->model_send_comp.model==&locate_models[0] &&
+       param->model_send_comp.opcode==AUTOMESH_NODE_OTA_STREAM) {
+        automesh_gateway_node_ota_on_send_complete(
+            param->model_send_comp.opcode,
+            (esp_err_t)param->model_send_comp.err_code);
+        return;
+    }
     if(event==ESP_BLE_MESH_CLIENT_MODEL_RECV_PUBLISH_MSG_EVT) {
         const uint32_t opcode=param->client_recv_publish_msg.opcode;
         esp_ble_mesh_model_t *model=param->client_recv_publish_msg.model;

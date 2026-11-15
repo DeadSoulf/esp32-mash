@@ -19,3 +19,10 @@ esp_err_t automesh_gateway_node_ota_abort(void);
 bool automesh_gateway_node_ota_active(void);
 uint32_t automesh_gateway_node_ota_progress(void);
 uint16_t automesh_gateway_node_ota_max_chunk(void);
+/* OTA3 can be used only when an approved node advertises it explicitly. */
+bool automesh_gateway_node_ota_streaming(void);
+/* Called by the existing vendor model callback. */
+void automesh_gateway_node_ota_on_send_complete(uint32_t opcode, esp_err_t result);
+/* Group checkpoint for OTA3, legacy per-chunk ACK for OTA1/OTA2. */
+esp_err_t automesh_gateway_node_ota_batch(uint32_t offset, const uint8_t *data,
+                                          size_t len, uint32_t *confirmed);

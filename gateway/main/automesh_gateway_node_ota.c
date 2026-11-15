@@ -13,10 +13,11 @@
 
 static const char *TAG="MESH_NODE_OTA";
 typedef struct {
-    bool active, awaiting;
+    bool active, awaiting, allow_short_ack, stream, send_pending;
     uint16_t address, id;
     uint32_t size, sent, expected_ack, ack_offset;
     uint8_t ack_status;
+    esp_err_t send_result;
     uint8_t chip;
     uint16_t chunk_len;   // Negotiated OTA1=96 or OTA2=224; never inferred
 } ota_state_t;
@@ -24,6 +25,7 @@ typedef struct {
 static esp_ble_mesh_model_t *mesh_model;
 static uint16_t mesh_net_idx, mesh_app_idx;
 static SemaphoreHandle_t reply_event;
+static SemaphoreHandle_t stream_event;
 static portMUX_TYPE state_guard = portMUX_INITIALIZER_UNLOCKED;
 static ota_state_t transfer;
 
@@ -34,7 +36,8 @@ void automesh_gateway_node_ota_init(esp_ble_mesh_model_t *model,
     mesh_net_idx = net_idx;
     mesh_app_idx = app_idx;
     if (!reply_event) reply_event = xSemaphoreCreateBinary();
-    configASSERT(reply_event != NULL);
+    if (!stream_event) stream_event = xSemaphoreCreateBinary();
+    configASSERT(reply_event != NULL && stream_event != NULL);
 }
 bool automesh_gateway_node_ota_active(void)
 {
@@ -52,6 +55,29 @@ uint16_t automesh_gateway_node_ota_max_chunk(void)
     portEXIT_CRITICAL(&state_guard);
     return n;
 }
+bool automesh_gateway_node_ota_streaming(void)
+{
+    bool stream;
+    portENTER_CRITICAL(&state_guard);
+    stream=transfer.active && transfer.stream;
+    portEXIT_CRITICAL(&state_guard);
+    return stream;
+}
+
+void automesh_gateway_node_ota_on_send_complete(uint32_t opcode, esp_err_t result)
+{
+    if (opcode!=AUTOMESH_NODE_OTA_STREAM || !stream_event)return;
+    bool notify=false;
+    portENTER_CRITICAL(&state_guard);
+    if (transfer.active && transfer.stream && transfer.send_pending) {
+        transfer.send_result=result;
+        transfer.send_pending=false;
+        notify=true;
+    }
+    portEXIT_CRITICAL(&state_guard);
+    if (notify) xSemaphoreGive(stream_event);
+}
+
 uint32_t automesh_gateway_node_ota_progress(void)
 {
     uint32_t n;
@@ -71,7 +97,9 @@ void automesh_gateway_node_ota_on_status(uint16_t source,
     portENTER_CRITICAL(&state_guard);
     if (transfer.active && transfer.awaiting &&
         transfer.address==source && transfer.id==id &&
-        (offset==transfer.expected_ack || payload[6]!=0)) {
+        (offset==transfer.expected_ack ||
+         (transfer.allow_short_ack && offset>=transfer.sent &&
+          offset<=transfer.expected_ack) || payload[6]!=0)) {
         transfer.ack_offset=offset;
         transfer.ack_status=payload[6];
         transfer.awaiting=false;
@@ -85,6 +113,8 @@ static const char *ota_stage(uint32_t opcode)
 {
     if (opcode == AUTOMESH_NODE_OTA_START) return "start";
     if (opcode == AUTOMESH_NODE_OTA_DATA) return "data";
+    if (opcode == AUTOMESH_NODE_OTA_CHECKPOINT) return "checkpoint";
+    if (opcode == AUTOMESH_NODE_OTA_STREAM) return "stream";
     if (opcode == AUTOMESH_NODE_OTA_FINISH) return "finish";
     if (opcode == AUTOMESH_NODE_OTA_ABORT) return "abort";
     return "unknown";
@@ -107,10 +137,12 @@ static esp_err_t send_await(uint32_t opcode, const uint8_t *payload,
     // START and DATA are idempotent on the node; FINISH is intentionally
     // never repeated because the node may already have rebooted.
     const unsigned attempts = (opcode==AUTOMESH_NODE_OTA_START ||
-                               opcode==AUTOMESH_NODE_OTA_DATA) ? 3u : 1u;
+                               opcode==AUTOMESH_NODE_OTA_DATA ||
+                               opcode==AUTOMESH_NODE_OTA_CHECKPOINT) ? 3u : 1u;
     const uint32_t timeout_ms=opcode==AUTOMESH_NODE_OTA_START?45000u:
                               opcode==AUTOMESH_NODE_OTA_FINISH?30000u:
-                              opcode==AUTOMESH_NODE_OTA_DATA?15000u:8500u;
+                              (opcode==AUTOMESH_NODE_OTA_DATA ||
+                               opcode==AUTOMESH_NODE_OTA_CHECKPOINT)?15000u:8500u;
 
     for (unsigned attempt=1; attempt<=attempts; ++attempt) {
         portENTER_CRITICAL(&state_guard);
@@ -125,6 +157,7 @@ static esp_err_t send_await(uint32_t opcode, const uint8_t *payload,
         while (xSemaphoreTake(reply_event, 0) == pdTRUE) {}
         portENTER_CRITICAL(&state_guard);
         transfer.expected_ack=expected_offset;
+        transfer.allow_short_ack=(opcode==AUTOMESH_NODE_OTA_CHECKPOINT);
         transfer.awaiting=true;
         portEXIT_CRITICAL(&state_guard);
 
@@ -176,6 +209,114 @@ static esp_err_t send_await(uint32_t opcode, const uint8_t *payload,
     return ESP_ERR_TIMEOUT;
 }
 
+/* Completion is lower-transport send completion, not application ACK.
+ * At most one segmented STREAM is active at any time. The node confirms
+ * the contiguous Flash-written offset separately with CHECKPOINT.
+ */
+static esp_err_t stream_send(uint32_t offset,const uint8_t *bytes,size_t length)
+{
+    if(!stream_event || !mesh_model || !bytes ||
+       length==0 || length>AUTOMESH_NODE_OTA_BLOCK)
+        return ESP_ERR_INVALID_ARG;
+    uint8_t packet[6+AUTOMESH_NODE_OTA_BLOCK];
+    uint16_t id,addr;
+    portENTER_CRITICAL(&state_guard);
+    if(!transfer.active || !transfer.stream || transfer.send_pending ||
+       transfer.awaiting) {
+        portEXIT_CRITICAL(&state_guard);
+        return ESP_ERR_INVALID_STATE;
+    }
+    id=transfer.id;
+    addr=transfer.address;
+    transfer.send_pending=true;
+    transfer.send_result=ESP_FAIL;
+    portEXIT_CRITICAL(&state_guard);
+    while(xSemaphoreTake(stream_event,0)==pdTRUE){}
+    automesh_put16(packet,id);
+    automesh_put32(packet+2,offset);
+    memcpy(packet+6,bytes,length);
+    esp_ble_mesh_msg_ctx_t ctx={0};
+    ctx.net_idx=mesh_net_idx;
+    ctx.app_idx=mesh_app_idx;
+    ctx.addr=addr;
+    ctx.send_ttl=5;
+    esp_err_t result=esp_ble_mesh_client_model_send_msg(mesh_model,&ctx,
+        AUTOMESH_NODE_OTA_STREAM,(uint16_t)(6+length),packet,
+        0,false,ROLE_PROVISIONER);
+    if(result!=ESP_OK) {
+        portENTER_CRITICAL(&state_guard);
+        transfer.send_pending=false;
+        portEXIT_CRITICAL(&state_guard);
+        return result;
+    }
+    if(xSemaphoreTake(stream_event,pdMS_TO_TICKS(20000))!=pdTRUE) {
+        portENTER_CRITICAL(&state_guard);
+        transfer.send_pending=false;
+        portEXIT_CRITICAL(&state_guard);
+        ESP_LOGW(TAG,"OTA3 Mesh SEND completion timeout at offset %lu",
+                 (unsigned long)offset);
+        return ESP_ERR_TIMEOUT;
+    }
+    portENTER_CRITICAL(&state_guard);
+    result=transfer.send_result;
+    portEXIT_CRITICAL(&state_guard);
+    return result;
+}
+
+esp_err_t automesh_gateway_node_ota_batch(uint32_t offset,const uint8_t *data,
+                                          size_t len,uint32_t *confirmed)
+{
+    if(!data || !confirmed || len==0 ||
+       len>AUTOMESH_NODE_OTA_BLOCK*AUTOMESH_NODE_OTA_STREAM_WINDOW)
+        return ESP_ERR_INVALID_ARG;
+    if(!transfer.active)return ESP_ERR_INVALID_STATE;
+    if(!transfer.stream) {
+        uint32_t pos=offset;
+        size_t used=0;
+        while(used<len) {
+            size_t n=len-used<transfer.chunk_len?len-used:transfer.chunk_len;
+            esp_err_t e=automesh_gateway_node_ota_chunk(pos,data+used,n,confirmed);
+            if(e!=ESP_OK)return e;
+            pos+=(uint32_t)n;
+            used+=n;
+        }
+        return ESP_OK;
+    }
+    if(offset!=transfer.sent || len>transfer.size-transfer.sent)
+        return ESP_ERR_INVALID_ARG;
+    const uint32_t goal=offset+(uint32_t)len;
+    uint32_t resume=offset;
+    // Missing segmented messages are retransmitted from the first missing
+    // contiguous byte, never by blindly replaying a completed image.
+    for(unsigned round=0;round<4 && resume<goal;round++) {
+        for(uint32_t pos=resume;pos<goal;) {
+            size_t count=(goal-pos)<transfer.chunk_len?
+                         (size_t)(goal-pos):transfer.chunk_len;
+            esp_err_t e=stream_send(pos,data+(pos-offset),count);
+            if(e!=ESP_OK)return e;
+            pos+=(uint32_t)count;
+        }
+        uint8_t query[2];
+        automesh_put16(query,transfer.id);
+        esp_err_t e=send_await(AUTOMESH_NODE_OTA_CHECKPOINT,query,sizeof(query),goal);
+        if(e!=ESP_OK)return e;
+        uint32_t received;
+        portENTER_CRITICAL(&state_guard);
+        received=transfer.ack_offset;
+        portEXIT_CRITICAL(&state_guard);
+        if(received<resume || received>goal)return ESP_FAIL;
+        if(received==resume)
+            ESP_LOGW(TAG,"OTA3 checkpoint no progress, retry %u/4 at %lu",
+                     round+1,(unsigned long)resume);
+        resume=received;
+        portENTER_CRITICAL(&state_guard);
+        transfer.sent=resume;
+        portEXIT_CRITICAL(&state_guard);
+    }
+    *confirmed=resume;
+    return resume==goal?ESP_OK:ESP_ERR_TIMEOUT;
+}
+
 esp_err_t automesh_gateway_node_ota_start(uint16_t address, uint8_t chip,
                                           uint32_t image_size, const uint8_t sha[32],
                                           uint16_t *session)
@@ -190,6 +331,7 @@ esp_err_t automesh_gateway_node_ota_start(uint16_t address, uint8_t chip,
     if (!automesh_node_ota_supported(address, chip))
         return ESP_ERR_NOT_SUPPORTED;
     const uint16_t max_chunk=automesh_node_ota_block_size(address);
+    const bool use_stream=automesh_node_ota_stream_supported(address);
     if (max_chunk!=AUTOMESH_NODE_OTA_LEGACY_BLOCK &&
         max_chunk!=AUTOMESH_NODE_OTA_BLOCK) return ESP_ERR_NOT_SUPPORTED;
     const uint16_t proposed_id=(uint16_t)(esp_random()|1u);
@@ -199,7 +341,8 @@ esp_err_t automesh_gateway_node_ota_start(uint16_t address, uint8_t chip,
         return ESP_ERR_INVALID_STATE;
     }
     transfer=(ota_state_t){.active=true,.address=address,
-        .id=proposed_id,.chip=chip,.size=image_size,.chunk_len=max_chunk};
+        .id=proposed_id,.chip=chip,.size=image_size,.chunk_len=max_chunk,
+        .stream=use_stream};
     portEXIT_CRITICAL(&state_guard);
     uint8_t packet[39];
     automesh_put16(packet, transfer.id);
@@ -217,8 +360,9 @@ esp_err_t automesh_gateway_node_ota_start(uint16_t address, uint8_t chip,
         return err;
     }
     *session=transfer.id;
-    ESP_LOGI(TAG,"Node OTA accepted by 0x%04x; %lu bytes, max DATA block=%u",
-             address,(unsigned long)image_size,(unsigned)max_chunk);
+    ESP_LOGI(TAG,"Node OTA accepted by 0x%04x; %lu bytes, max DATA block=%u, protocol=%s",
+             address,(unsigned long)image_size,(unsigned)max_chunk,
+             use_stream?"OTA3":"OTA1/OTA2");
     return ESP_OK;
 }
 

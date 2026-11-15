@@ -424,9 +424,9 @@ static esp_err_t host_ota_handler(httpd_req_t *req)
     return automesh_ota_upload(req);
 }
 
-/* Browser sends the file in 96-byte slices. The gateway never stores
- * the complete node firmware or overwrites its own OTA fallback partition.
- * Each BLE Mesh slice is acknowledged by the selected node.
+/* Browser streams bounded HTTP batches. The gateway never stores the whole
+ * firmware or overwrites its own OTA fallback partition. OTA1/2 ACK each
+ * block; OTA3 uses lower-transport completion and a group checkpoint.
  */
 static esp_err_t node_ota_error(httpd_req_t *req, esp_err_t err,
                                 const char *stage)
@@ -486,10 +486,13 @@ static esp_err_t node_ota_start_handler(httpd_req_t *req)
                         target,(uint32_t)sz->valueint,digest,&session);
     cJSON_Delete(body);
     if(result!=ESP_OK)return node_ota_error(req,result,"start");
-    char out[116];
+    char out[146];
     snprintf(out,sizeof(out),
-             "{\"accepted\":true,\"session\":%u,\"offset\":0,\"max_chunk\":%u}",
-             session,(unsigned)automesh_gateway_node_ota_max_chunk());
+             "{\"accepted\":true,\"session\":%u,\"offset\":0,\"max_chunk\":%u,\"transport\":\"%s\"}",
+             session,(unsigned)automesh_gateway_node_ota_max_chunk(),
+             automesh_gateway_node_ota_streaming()?"OTA3":
+             automesh_gateway_node_ota_max_chunk()==AUTOMESH_NODE_OTA_BLOCK?
+             "OTA2":"OTA1");
     return json_reply(req,"200 OK",out);
 }
 static esp_err_t node_ota_chunk_handler(httpd_req_t *req)
@@ -555,13 +558,9 @@ static esp_err_t node_ota_batch_handler(httpd_req_t *req)
         got+=(size_t)n;
     }
     uint32_t confirmed=(uint32_t)offset;
-    for(size_t pos=0;pos<got;) {
-        size_t len=got-pos<step?got-pos:step;
-        esp_err_t err=automesh_gateway_node_ota_chunk((uint32_t)offset+
-                                 (uint32_t)pos,data+pos,len,&confirmed);
-        if(err!=ESP_OK)return node_ota_error(req,err,"batch");
-        pos+=len;
-    }
+    esp_err_t result=automesh_gateway_node_ota_batch(
+        (uint32_t)offset,data,got,&confirmed);
+    if(result!=ESP_OK)return node_ota_error(req,result,"batch");
     char out[70];
     snprintf(out,sizeof(out),"{\"accepted\":true,\"offset\":%lu}",
              (unsigned long)confirmed);

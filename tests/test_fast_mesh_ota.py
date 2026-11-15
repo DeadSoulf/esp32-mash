@@ -63,7 +63,7 @@ class FastMeshOtaTests(unittest.TestCase):
 
     def test_all_versions_match(self):
         for role in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.23-dev")',src(role+"/CMakeLists.txt"))
-        self.assertIn("AutoMesh-v0.3.23-dev.zip",src(".github/workflows/esp-idf-c3.yml"))
+            self.assertIn('set(PROJECT_VER "0.3.24-dev")',src(role+"/CMakeLists.txt"))
+        self.assertIn("AutoMesh-v0.3.24-dev.zip",src(".github/workflows/esp-idf-c3.yml"))
 
 if __name__=="__main__":unittest.main()

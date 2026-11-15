@@ -29,10 +29,10 @@ class ShortDeviceVersionTests(unittest.TestCase):
 
     def test_release_consistency(self):
         for role in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.23-dev")',
+            self.assertIn('set(PROJECT_VER "0.3.24-dev")',
                           read(role+"/CMakeLists.txt"))
-        self.assertIn("AutoMesh-v0.3.23-dev.zip",
+        self.assertIn("AutoMesh-v0.3.24-dev.zip",
                       read(".github/workflows/esp-idf-c3.yml"))
-        self.assertIn("v0.3.23-dev",read("docs/PROJECT-STATE.md"))
+        self.assertIn("v0.3.24-dev",read("docs/PROJECT-STATE.md"))
 
 if __name__=="__main__": unittest.main()

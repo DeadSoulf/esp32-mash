@@ -13,7 +13,7 @@ class MeshOtaTimeoutRecoveryTests(unittest.TestCase):
         main=read("node/main/main.c")
         self.assertIn('esp_err_t automesh_node_ota_init(void)',node)
         self.assertIn('automesh_node_ota_init();',main)
-        self.assertIn('xQueueCreate(4, sizeof(ota_message_t))',node)
+        self.assertIn('xQueueCreate(8, sizeof(ota_message_t))',node)
         self.assertIn('xTaskCreate(ota_worker_task',node)
         self.assertIn('xQueueSend(ota_requests, &message, 0)',node)
         self.assertIn('process_ota_command(message.model, &message.ctx',node)

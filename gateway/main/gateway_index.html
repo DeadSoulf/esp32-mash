@@ -1239,36 +1239,32 @@ async function uploadNodeImage(option,bytes,digest){
    let lastProgressAt=0;
    progress.textContent='Передаю по BLE Mesh: '+(blockBytes===224?
      'ускоренный OTA2':'совместимый OTA1')+' ('+blockBytes+' байт/блок).';
-   for(let offset=0;offset<bytes.length;offset+=blockBytes){
+   // Coalesce four blocks per HTTP request; each Mesh block is still ACKed.
+   // Never retry an ambiguous partially completed batch.
+   const batchBytes=blockBytes*4;
+   for(let offset=0;offset<bytes.length;offset+=batchBytes){
      if(nodeOtaCancelled)throw Error('Остановлено пользователем');
-     const block=bytes.subarray(offset,Math.min(bytes.length,offset+blockBytes));
-     let ok=false,reason='';
-     for(let attempt=0;attempt<3&&!ok;attempt++){
-       try{
-         const response=await fetch('/api/ota/node/chunk',{
-           method:'POST',cache:'no-store',
-           headers:{'X-Automesh-Admin':token,'X-OTA-Offset':String(offset),
-                    'Content-Type':'application/octet-stream'},
-           body:block
-         });
-         if(response.status===401||response.status===429){
-           invalidateAuth('Доступ к шлюзу завершился во время OTA');
-           throw Error('Потеряна авторизация');
-         }
-         if(!response.ok){
-           let reason='HTTP '+response.status;
-           try{
-             const info=await response.json();
-             reason=(info.error||reason)+' ('+(info.stage||'data')+')';
-           }catch(_){}
-           throw Error(reason);
-         }
-         const ack=await response.json();
-         if(ack.offset!==offset+block.length)throw Error('Неверный ответ узла');
-         ok=true;
-       }catch(e){reason=e.message;}
+     const block=bytes.subarray(offset,Math.min(bytes.length,offset+batchBytes));
+     const response=await fetch('/api/ota/node/batch',{
+       method:'POST',cache:'no-store',
+       headers:{'X-Automesh-Admin':token,'X-OTA-Offset':String(offset),
+                'Content-Type':'application/octet-stream'},
+       body:block
+     });
+     if(response.status===401||response.status===429){
+       invalidateAuth('Доступ к шлюзу завершился во время OTA');
+       throw Error('Потеряна авторизация');
      }
-     if(!ok)throw Error('Ошибка передачи блока '+offset+': '+reason);
+     if(!response.ok){
+       let reason='HTTP '+response.status;
+       try{
+         const info=await response.json();
+         reason=(info.error||reason)+' ('+(info.stage||'batch')+')';
+       }catch(_){}
+       throw Error(reason);
+     }
+     const ack=await response.json();
+     if(ack.offset!==offset+block.length)throw Error('Неверный ответ узла');
      const now=performance.now();
      if(now-lastProgressAt>=2000 || offset+block.length===bytes.length){
        const done=offset+block.length;

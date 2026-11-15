@@ -38,8 +38,10 @@ class MeshPairingAfterFlashTests(unittest.TestCase):
 
     def test_wifi_setup_does_not_claim_mesh_enabled(self):
         gateway=source("gateway/main/main.c")
-        self.assertIn('if (!automesh_web_has_network())',gateway)
-        self.assertIn("Setup AP mode; Bluetooth Mesh paused",gateway)
+        self.assertIn('if (!usb_only && !automesh_web_has_network())',gateway)
+        self.assertIn("Setup AP mode; Mesh paused",gateway)
+        self.assertIn("if(usb_only)",gateway)
+        self.assertIn("USB-only Mesh provisioner active; Wi-Fi disabled",gateway)
 
 if __name__=="__main__":
     unittest.main()

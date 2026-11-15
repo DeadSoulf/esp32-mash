@@ -107,6 +107,8 @@ static bool process_ota_command(esp_ble_mesh_model_t *model,
 {
     if (opcode != AUTOMESH_NODE_OTA_START &&
         opcode != AUTOMESH_NODE_OTA_DATA &&
+        opcode != AUTOMESH_NODE_OTA_STREAM &&
+        opcode != AUTOMESH_NODE_OTA_CHECKPOINT &&
         opcode != AUTOMESH_NODE_OTA_FINISH &&
         opcode != AUTOMESH_NODE_OTA_ABORT)
         return false;
@@ -186,21 +188,32 @@ static bool process_ota_command(esp_ble_mesh_model_t *model,
         ack(model, ctx, id, offset, 0);
         return true;
     }
-    if (opcode == AUTOMESH_NODE_OTA_DATA) {
+    if (opcode == AUTOMESH_NODE_OTA_CHECKPOINT) {
+        // Replies include only Flash-confirmed contiguous bytes.
+        if (length != 2) ack(model, ctx, id, ota.received, 2);
+        else ack(model, ctx, id, ota.received, 0);
+        return true;
+    }
+    if (opcode == AUTOMESH_NODE_OTA_DATA ||
+        opcode == AUTOMESH_NODE_OTA_STREAM) {
+        const bool streamed = opcode == AUTOMESH_NODE_OTA_STREAM;
         if (length < 7 || length > 6 + AUTOMESH_NODE_OTA_BLOCK) {
             ack(model, ctx, id, ota.received, 2);
             return true;
         }
         uint32_t offset = automesh_u32(p + 2);
         size_t count = length - 6;
-        if (offset < ota.received && offset + count == ota.received) {
-            // HTTP retransmit after a lost ACK: don't write twice.
-            ack(model, ctx, id, ota.received, 0);
+        if (offset < ota.received && count <= ota.received - offset) {
+            // Duplicate after a lost checkpoint; Flash is already committed.
+            // Do not acknowledge individual OTA3 stream packets.
+            if (!streamed) ack(model, ctx, id, ota.received, 0);
             return true;
         }
         if (offset != ota.received || count > ota.size - ota.received ||
             (offset == 0 && !image_header_matches_chip(p + 6, count))) {
-            ack(model, ctx, id, ota.received, 2);
+            // OTA3 can recover a missing packet at the next checkpoint.
+            // Legacy DATA retains the original explicit error.
+            if (!streamed) ack(model, ctx, id, ota.received, 2);
             return true;
         }
         if (esp_ota_write(ota.handle, p + 6, count) != ESP_OK ||
@@ -211,7 +224,7 @@ static bool process_ota_command(esp_ble_mesh_model_t *model,
             return true;
         }
         ota.received += count;
-        ack(model, ctx, id, ota.received, 0);
+        if (!streamed) ack(model, ctx, id, ota.received, 0);
         return true;
     }
     if (opcode == AUTOMESH_NODE_OTA_FINISH) {
@@ -270,7 +283,7 @@ static void ota_worker_task(void *argument)
 esp_err_t automesh_node_ota_init(void)
 {
     if (ota_requests) return ESP_OK;
-    ota_requests = xQueueCreate(4, sizeof(ota_message_t));
+    ota_requests = xQueueCreate(8, sizeof(ota_message_t));
     if (!ota_requests) return ESP_ERR_NO_MEM;
     if (xTaskCreate(ota_worker_task, "node_mesh_ota", 5120,
                     NULL, 5, &ota_worker) != pdPASS) {
@@ -289,6 +302,8 @@ bool automesh_node_ota_command(esp_ble_mesh_model_t *model,
 {
     if (opcode != AUTOMESH_NODE_OTA_START &&
         opcode != AUTOMESH_NODE_OTA_DATA &&
+        opcode != AUTOMESH_NODE_OTA_STREAM &&
+        opcode != AUTOMESH_NODE_OTA_CHECKPOINT &&
         opcode != AUTOMESH_NODE_OTA_FINISH &&
         opcode != AUTOMESH_NODE_OTA_ABORT)
         return false;

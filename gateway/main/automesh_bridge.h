@@ -21,6 +21,8 @@ void automesh_note_version(uint16_t mesh_address, const uint8_t *data, size_t le
 bool automesh_node_ota_supported(uint16_t address, uint8_t chip);
 /* Explicitly negotiated maximum data length; 0 means unavailable. */
 uint16_t automesh_node_ota_block_size(uint16_t address);
+/* True only for approved, recently seen nodes explicitly advertising OTA3. */
+bool automesh_node_ota_stream_supported(uint16_t address);
 /* Only approved and natively registered devices may appear in topology. */
 bool automesh_mesh_address_approved(uint16_t address);
 esp_err_t automesh_approve_uuid(const char *uuid_hex);

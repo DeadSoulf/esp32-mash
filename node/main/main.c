@@ -91,6 +91,8 @@ static esp_ble_mesh_model_op_t locate_op[] = {
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_FW_VERSION_GET, 0),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_START, 39),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_DATA, 7),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_STREAM, 7),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_CHECKPOINT, 2),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_FINISH, 2),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_ABORT, 2),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_PEER_HELLO, 2),
@@ -501,7 +503,7 @@ static void automesh_locate_cb(esp_ble_mesh_model_cb_event_t event,
         const esp_app_desc_t *app = esp_app_get_description();
         char version[32];
         // Hash prefix identifies this exact ELF build, not a Git commit SHA.
-        int count = snprintf(version, sizeof(version), "%.*s %s OTA2 %02x%02x%02x%02x",
+        int count = snprintf(version, sizeof(version), "%.*s %s OTA3 %02x%02x%02x%02x",
                              12, app->version,
 #if CONFIG_IDF_TARGET_ESP32C3
                              "C3",

@@ -340,9 +340,10 @@ bool automesh_node_ota_supported(uint16_t address, uint8_t chip)
             c->mesh_address!=address ||
             !c->last_reply_us ||
             now-c->last_reply_us>=35000000LL) continue;
-        // OTA1 and OTA2 are explicitly advertised; never guess capability.
+        // Never try a new transport unless a live approved node advertises it.
         const bool feature=strstr(c->fw_version," OTA1 ")!=NULL ||
-                           strstr(c->fw_version," OTA2 ")!=NULL;
+                           strstr(c->fw_version," OTA2 ")!=NULL ||
+                           strstr(c->fw_version," OTA3 ")!=NULL;
         const bool target=(chip=='C') ? strstr(c->fw_version," C3 ")!=NULL :
                                         strstr(c->fw_version," S3 ")!=NULL;
         ok=feature && target;
@@ -363,13 +364,32 @@ uint16_t automesh_node_ota_block_size(uint16_t address)
         if(!c->occupied || !c->approved || c->rejected || c->removing ||
            c->mesh_address!=address || !c->last_reply_us ||
            now-c->last_reply_us>=35000000LL)continue;
-        if(strstr(c->fw_version," OTA2 "))size=AUTOMESH_NODE_OTA_BLOCK;
+        if(strstr(c->fw_version," OTA3 ") ||
+           strstr(c->fw_version," OTA2 "))size=AUTOMESH_NODE_OTA_BLOCK;
         else if(strstr(c->fw_version," OTA1 "))
             size=AUTOMESH_NODE_OTA_LEGACY_BLOCK;
         break;
     }
     xSemaphoreGive(lock);
     return size;
+}
+
+bool automesh_node_ota_stream_supported(uint16_t address)
+{
+    if(!lock)return false;
+    bool supported=false;
+    const int64_t now=esp_timer_get_time();
+    if(xSemaphoreTake(lock,pdMS_TO_TICKS(150))!=pdTRUE)return false;
+    for(int i=0;i<MAX_CANDIDATES;i++) {
+        const candidate_t *c=&candidates[i];
+        if(c->occupied && c->approved && !c->rejected && !c->removing &&
+           c->mesh_address==address && c->last_reply_us &&
+           now-c->last_reply_us<35000000LL &&
+           strstr(c->fw_version," OTA3 ")!=NULL)
+            supported=true;
+    }
+    xSemaphoreGive(lock);
+    return supported;
 }
 
 void automesh_note_reply(uint16_t mesh_address)

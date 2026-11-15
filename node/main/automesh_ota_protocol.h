@@ -10,6 +10,12 @@
 #define AUTOMESH_NODE_OTA_FINISH ESP_BLE_MESH_MODEL_OP_3(0x38, AUTOMESH_VENDOR_CID)
 #define AUTOMESH_NODE_OTA_ABORT ESP_BLE_MESH_MODEL_OP_3(0x39, AUTOMESH_VENDOR_CID)
 #define AUTOMESH_NODE_OTA_STATUS ESP_BLE_MESH_MODEL_OP_3(0x3A, AUTOMESH_VENDOR_CID)
+/* OTA3: one segmented STREAM at a time; CHECKPOINT returns the next
+ * contiguous Flash offset once per window. Older OTA1/OTA2 opcodes unchanged.
+ * Both messages are authenticated with the existing bound Mesh AppKey. */
+#define AUTOMESH_NODE_OTA_STREAM ESP_BLE_MESH_MODEL_OP_3(0x3C, AUTOMESH_VENDOR_CID)
+#define AUTOMESH_NODE_OTA_CHECKPOINT ESP_BLE_MESH_MODEL_OP_3(0x3D, AUTOMESH_VENDOR_CID)
+#define AUTOMESH_NODE_OTA_STREAM_WINDOW 4u
 #define AUTOMESH_PEER_HELLO ESP_BLE_MESH_MODEL_OP_3(0x3B, AUTOMESH_VENDOR_CID)
 /* OTA1 nodes accept at most 96 bytes. OTA2 nodes accept 224 bytes in one
  * application message, still below the BLE Mesh 384-byte upper-transport SDU.

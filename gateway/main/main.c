@@ -391,6 +391,23 @@ static void recv_unprov_adv_pkt(uint8_t dev_uuid[16], uint8_t addr[BD_ADDR_LEN],
     automesh_candidate(dev_uuid, addr, addr_type, oob_info, bearer);
 }
 
+/* ESP-IDF restores provisioner AppKeys from NVS at boot. Binding must
+ * not depend solely on the ADD_LOCAL_APP_KEY completion event: that event
+ * does not necessarily occur when the key already exists.
+ */
+static void automesh_bind_provisioner_models(uint16_t app_idx)
+{
+    esp_err_t err=esp_ble_mesh_provisioner_bind_app_key_to_local_model(
+        PROV_OWN_ADDR,app_idx,ESP_BLE_MESH_MODEL_ID_GEN_ONOFF_CLI,
+        ESP_BLE_MESH_CID_NVAL);
+    if(err!=ESP_OK)
+        ESP_LOGW(TAG,"OnOff client AppKey bind request: %s",esp_err_to_name(err));
+    err=esp_ble_mesh_provisioner_bind_app_key_to_local_model(
+        PROV_OWN_ADDR,app_idx,AUTOMESH_LOCATE_CLI_MODEL,AUTOMESH_VENDOR_CID);
+    if(err!=ESP_OK)
+        ESP_LOGW(TAG,"Vendor client AppKey bind request: %s",esp_err_to_name(err));
+}
+
 static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
                                              esp_ble_mesh_prov_cb_param_t *param)
 {
@@ -452,23 +469,12 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
         break;
     }
     case ESP_BLE_MESH_PROVISIONER_ADD_LOCAL_APP_KEY_COMP_EVT: {
-        ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_ADD_LOCAL_APP_KEY_COMP_EVT, err_code %d", param->provisioner_add_app_key_comp.err_code);
-        if (param->provisioner_add_app_key_comp.err_code == ESP_OK) {
-            esp_err_t err = 0;
-            prov_key.app_idx = param->provisioner_add_app_key_comp.app_idx;
-            err = esp_ble_mesh_provisioner_bind_app_key_to_local_model(PROV_OWN_ADDR, prov_key.app_idx,
-                    ESP_BLE_MESH_MODEL_ID_GEN_ONOFF_CLI, ESP_BLE_MESH_CID_NVAL);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Provisioner bind local model appkey failed");
-                return;
-            }
-            err=esp_ble_mesh_provisioner_bind_app_key_to_local_model(
-                PROV_OWN_ADDR, prov_key.app_idx,
-                AUTOMESH_LOCATE_CLI_MODEL, AUTOMESH_VENDOR_CID);
-            if(err!=ESP_OK) {
-                ESP_LOGE(TAG,"Provisioner bind Locate client appkey failed: %s",esp_err_to_name(err));
-                return;
-            }
+        const esp_err_t result=param->provisioner_add_app_key_comp.err_code;
+        if(result==ESP_OK) {
+            prov_key.app_idx=param->provisioner_add_app_key_comp.app_idx;
+            automesh_bind_provisioner_models(prov_key.app_idx);
+        } else {
+            ESP_LOGE(TAG,"Provisioner AppKey add failed: %s",esp_err_to_name(result));
         }
         break;
     }
@@ -1027,10 +1033,25 @@ static esp_err_t ble_mesh_init(void)
         return err;
     }
 
-    err = esp_ble_mesh_provisioner_add_local_app_key(prov_key.app_key, prov_key.net_idx, prov_key.app_idx);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add local AppKey (err %d)", err);
-        return err;
+    // Existing networks retain AppKey and node bindings in NVS across USB/OTA.
+    // Never replace a restored key or fail because an already-known key is added.
+    const uint8_t *saved_key=esp_ble_mesh_provisioner_get_local_app_key(
+        prov_key.net_idx,prov_key.app_idx);
+    if(saved_key) {
+        if(memcmp(saved_key,prov_key.app_key,sizeof(prov_key.app_key))!=0) {
+            ESP_LOGE(TAG,"Restored Mesh AppKey differs from gateway NVS; refuse to re-key automatically");
+            return ESP_ERR_INVALID_STATE;
+        }
+        ESP_LOGI(TAG,"Restored Mesh AppKey found; reuse pairing and rebind local clients");
+        automesh_bind_provisioner_models(prov_key.app_idx);
+    } else {
+        err=esp_ble_mesh_provisioner_add_local_app_key(
+            prov_key.app_key,prov_key.net_idx,prov_key.app_idx);
+        if(err!=ESP_OK) {
+            ESP_LOGE(TAG,"Failed to add local AppKey: %s",esp_err_to_name(err));
+            return err;
+        }
+        ESP_LOGI(TAG,"Mesh AppKey installation requested for new provisioner");
     }
 
     ESP_LOGI(TAG, "BLE Mesh Provisioner initialized");

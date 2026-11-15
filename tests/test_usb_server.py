@@ -24,6 +24,8 @@ class UsbServerTests(unittest.TestCase):
         self.assertIn("nvs_set_u8(h,\"usb_mode\"",bridge)
         self.assertIn("automesh_bridge_usb_mode()",main)
         self.assertIn("if(usb_only)",main)
+        self.assertIn("if (!usb_only && !automesh_web_has_network())",main)
+        self.assertIn("esp_restart()",bridge)
         self.assertIn("automesh_bridge_start();",main)
         self.assertIn("USBMODE",bridge)
         self.assertIn("snapshot_end",bridge)

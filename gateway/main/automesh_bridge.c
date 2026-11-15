@@ -308,6 +308,25 @@ void automesh_note_version(uint16_t mesh_address, const uint8_t *data, size_t le
     if (found) automesh_led_mark_alive();
 }
 
+bool automesh_mesh_address_approved(uint16_t address)
+{
+    if (address==0x0001) return true;
+    if(!ESP_BLE_MESH_ADDR_IS_UNICAST(address) || !lock)return false;
+    if(xSemaphoreTake(lock,pdMS_TO_TICKS(100))!=pdTRUE)return false;
+    bool approved=false;
+    for(int i=0;i<MAX_CANDIDATES;i++) {
+        const candidate_t *c=&candidates[i];
+        if(c->occupied && c->approved && !c->rejected && !c->removing &&
+           c->mesh_address==address && provisioner_ready &&
+           esp_ble_mesh_provisioner_get_node_with_uuid(c->device.uuid)) {
+            approved=true;
+            break;
+        }
+    }
+    xSemaphoreGive(lock);
+    return approved;
+}
+
 bool automesh_node_ota_supported(uint16_t address, uint8_t chip)
 {
     if (!lock || (chip != 'C' && chip != 'S')) return false;

@@ -47,6 +47,17 @@ small{color:#9eb4c8}
 .wifi-network .signal{font-size:13px;flex-shrink:0;color:#bce8d9}
 
 @media(max-width:680px){header{align-items:flex-start;flex-direction:column}.overview{grid-template-columns:1fr}body{padding:14px}h1{font-size:24px}}
+
+/* Live, RAM-only BLE Mesh topology. No external JS libraries or services. */
+.mesh-tabs,.mesh-actions,.mesh-legend{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0}
+.mesh-tabs button[aria-selected="true"]{border-color:#58a6e8;background:#174366}
+#meshSvg{display:block;width:100%;height:430px;border:1px solid #38536b;border-radius:12px;background:#101f30;touch-action:none;cursor:grab}
+#meshSvg:active{cursor:grabbing}
+.mesh-legend span{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:#b6c8d8}
+.mesh-key{display:inline-block;width:24px;border-top:3px solid #42aa87}
+.mesh-key.medium{border-color:#d3a044}
+.mesh-key.weak{border-color:#d87575}
+.mesh-key.oneway{border-top-style:dashed;border-color:#91a1b2}
 </style>
 </head>
 <body>
@@ -82,7 +93,11 @@ small{color:#9eb4c8}
 <div class="metric"><span class="sub">В сети</span><strong id="live">—</strong></div>
 <div class="metric"><span class="sub">Ожидают допуска</span><strong id="waiting">—</strong></div>
 </div>
-<section class="panel">
+<div class="mesh-tabs" id="meshTabs" role="tablist" aria-label="Вид сети" hidden>
+<button type="button" id="showDevices" role="tab" aria-controls="devicesPanel" aria-selected="true">Устройства</button>
+<button type="button" id="showMeshMap" role="tab" aria-controls="meshMapPanel" aria-selected="false">Карта Mesh</button>
+</div>
+<section class="panel" id="devicesPanel" role="tabpanel">
 <h2>Устройства</h2>
 <div class="wifi-search"><button id="scanMesh" type="button" class="secondary" disabled>Поиск новых устройств</button><span class="sub" id="meshScanStatus" role="status">Войдите в панель для поиска устройств.</span></div>
 <p class="sub">«Найти» запускает быстрое мигание выбранного узла на 15 секунд. Результат показывается после подтверждения устройства. Кнопка «Имя» сохраняет название, которое останется после перезагрузки.</p>
@@ -90,6 +105,26 @@ small{color:#9eb4c8}
 <thead><tr><th>Устройство</th><th>Адрес Mesh</th><th>Состояние</th><th>Прошивка</th><th>Управление</th></tr></thead>
 <tbody id="devices"><tr><td colspan="5" class="sub">Введите ключ администратора</td></tr></tbody>
 </table></div>
+</section>
+<section class="panel" id="meshMapPanel" role="tabpanel" hidden>
+<h2>Карта Mesh</h2>
+<p class="sub">Реальные радиососеди по коротким Bluetooth-маякам TTL=1. Линии показывают наблюдаемую связь, а не фиксированный путь маршрутизации. Данные обновляются примерно раз в минуту; старые измерения пропадают.</p>
+<div class="mesh-actions">
+<button type="button" class="secondary" id="meshMapRefresh">Обновить данные</button>
+<button type="button" class="secondary" id="meshMapZoomIn" aria-label="Приблизить карту">+</button>
+<button type="button" class="secondary" id="meshMapZoomOut" aria-label="Отдалить карту">−</button>
+<button type="button" class="secondary" id="meshMapReset">Сбросить вид</button>
+</div>
+<div class="mesh-legend">
+<span><i class="mesh-key"></i> Хорошая связь</span>
+<span><i class="mesh-key medium"></i> Средняя</span>
+<span><i class="mesh-key weak"></i> Слабая</span>
+<span><i class="mesh-key oneway"></i> Подтверждена одной стороной</span>
+</div>
+<svg id="meshSvg" viewBox="0 0 900 430" role="img" aria-label="Карта зарегистрированных узлов и прямых радиососедей">
+<g id="meshScene"></g></svg>
+<p class="sub" id="meshMapStatus" role="status">Ожидаю измерений от зарегистрированных устройств.</p>
+<p class="sub">Перетаскивайте узлы мышью или пальцем. Колёсико и кнопки +/− меняют масштаб; свободное место позволяет сдвигать карту. Узлы со старой прошивкой не показывают радиососедей до обновления. Положения не сохраняются.</p>
 </section>
 <section class="panel" id="otaPanel" hidden>
 <h2>Обновление прошивки</h2>
@@ -151,6 +186,15 @@ let uploadingNodeOta=false;
 let nodeOtaCancelled=false;
 let preparedOta=null;
 let otaPreparationId=0;
+let activeMeshTab='devices';
+let meshMapDevices=[];
+let meshMapLinks=[];
+let meshMapLastFetch=0;
+let meshMapBusy=false;
+let meshMapPositions=new Map();
+let meshMapScale=1;
+let meshMapPan={x:0,y:0};
+let meshMapDragging=null;
 const $=id=>document.getElementById(id);
 $('secret').value=token;
 function message(s){$('message').textContent=s;$('firstAdminMessage').textContent=s;}
@@ -175,6 +219,9 @@ async function bootstrapAdmin(){
      $('secret').value='';
      $('wifiSetup').hidden=true;
      $('adminChange').hidden=true;
+     $('meshTabs').hidden=true;
+     $('meshMapPanel').hidden=true;
+     $('devicesPanel').hidden=false;
  $('otaPanel').hidden=true;
      $('meshScanStatus').textContent='Сначала создайте администратора.';
      $('connection').textContent='Нужно создать администратора';
@@ -191,6 +238,9 @@ function invalidateAuth(reason){
  $('secret').value='';
  $('wifiSetup').hidden=true;
  $('adminChange').hidden=true;
+ $('meshTabs').hidden=true;
+ $('meshMapPanel').hidden=true;
+ $('devicesPanel').hidden=false;
  $('otaPanel').hidden=true;
  $('authPanel').hidden=false;
  $('logout').hidden=true;
@@ -250,6 +300,7 @@ async function update(){
    'Поиск Mesh доступен после подключения шлюза к роутеру.':
    'BLE Mesh обнаруживает узлы автоматически. Нажмите для обновления списка.';
  $('adminChange').hidden=false;
+ $('meshTabs').hidden=false;
  $('otaPanel').hidden=!state.host_ota_ready && !state.mesh_ota_ready;
  $('ssid').textContent=state.ssid;
  $('webAddress').textContent=state.ip;
@@ -260,6 +311,11 @@ async function update(){
  if(!state.setup_mode && !$('routerSsid').value) $('routerSsid').value=state.ssid;
  $('connection').textContent=state.setup_mode?'Режим настройки Wi-Fi':'Шлюз доступен';
  const nodes=list.devices||[];
+ meshMapDevices=nodes;
+ if(activeMeshTab==='map'){
+   if(Date.now()-meshMapLastFetch>=15000)await refreshMeshData();
+   renderMeshMap();
+ }
  const chooser=$('otaTarget'), previousSelection=chooser.value;
  const hostChip=state.chip==='ESP32-C3'?'C3':state.chip==='ESP32-S3'?'S3':'';
  const gateway=new Option('Шлюз · '+(state.chip||'чип неизвестен')+
@@ -390,6 +446,240 @@ async function update(){
    }
  }finally{updateBusy=false;}
 }
+
+
+/* All topology state is in RAM/browser session; no routes or radio history
+ * are saved. The map uses measurements from TTL=1 beacons only. */
+const meshSvgNs='http://www.w3.org/2000/svg';
+const meshSvg=$('meshSvg');
+function meshElement(name,attributes,parent,text){
+ const element=document.createElementNS(meshSvgNs,name);
+ for(const [key,value] of Object.entries(attributes||{}))
+   element.setAttribute(key,String(value));
+ if(text!==undefined)element.textContent=String(text);
+ if(parent)parent.append(element);
+ return element;
+}
+function meshRawPoint(event){
+ const matrix=meshSvg.getScreenCTM();
+ if(!matrix)return {x:450,y:215};
+ const p=meshSvg.createSVGPoint();
+ p.x=event.clientX;p.y=event.clientY;
+ const result=p.matrixTransform(matrix.inverse());
+ return {x:result.x,y:result.y};
+}
+function meshWorldPoint(raw){
+ return {x:(raw.x-meshMapPan.x)/meshMapScale,
+         y:(raw.y-meshMapPan.y)/meshMapScale};
+}
+function meshMoveZoom(multiplier,at={x:450,y:215}){
+ const world=meshWorldPoint(at);
+ meshMapScale=Math.max(.4,Math.min(3,meshMapScale*multiplier));
+ meshMapPan={x:at.x-world.x*meshMapScale,
+             y:at.y-world.y*meshMapScale};
+ renderMeshMap();
+}
+function meshPosition(address,index,total){
+ const key=String(address);
+ if(meshMapPositions.has(key))return meshMapPositions.get(key);
+ let position;
+ if(address===1)position={x:450,y:215};
+ else{
+   const angle=-Math.PI/2+2*Math.PI*index/Math.max(total,1);
+   const radius=total>12?182:154;
+   position={x:450+radius*Math.cos(angle),y:215+radius*.92*Math.sin(angle)};
+ }
+ meshMapPositions.set(key,position);
+ return position;
+}
+function meshSignalColor(dbm){
+ return dbm>=-70?'#42aa87':dbm>=-85?'#d3a044':'#d87575';
+}
+function renderMeshMap(){
+ if(activeMeshTab!=='map'||!token)return;
+ const known=new Map();
+ known.set(1,{address:1,name:'Шлюз',state:'online',online:true});
+ const registered=meshMapDevices.filter(n=>
+   Number.isInteger(Number(n.address)) && Number(n.address)>1 &&
+   Number(n.address)<0x8000 && n.mesh_configured && n.state!=='removing');
+ registered.sort((a,b)=>a.address-b.address);
+ for(const n of registered)known.set(Number(n.address),n);
+ const addresses=[...known.keys()];
+ for(const key of meshMapPositions.keys())
+   if(!known.has(Number(key)))meshMapPositions.delete(key);
+ const positions=new Map();
+ addresses.forEach((address,i)=>{
+   positions.set(address,meshPosition(address,i-1,addresses.length-1));
+ });
+ const pairs=new Map();
+ for(const link of meshMapLinks){
+   const src=Number(link.source),dst=Number(link.target);
+   const rssi=Number(link.rssi);
+   if(!known.has(src)||!known.has(dst)||src===dst||
+      !Number.isFinite(rssi) || rssi>=0 || rssi<-127)continue;
+   const key=[Math.min(src,dst),Math.max(src,dst)].join(':');
+   let pair=pairs.get(key);
+   if(!pair){
+     pair={a:Math.min(src,dst),b:Math.max(src,dst),samples:[]};
+     pairs.set(key,pair);
+   }
+   pair.samples.push({src,dst,rssi,age:Math.max(0,Number(link.age)||0)});
+ }
+ const scene=$('meshScene');
+ scene.replaceChildren();
+ scene.setAttribute('transform','translate('+meshMapPan.x+' '+meshMapPan.y+
+   ') scale('+meshMapScale+')');
+ for(const pair of pairs.values()){
+   const p=positions.get(pair.a),q=positions.get(pair.b);
+   if(!p||!q)continue;
+   const rssi=Math.min(...pair.samples.map(o=>o.rssi));
+   const bidirectional=pair.samples.some(o=>o.src===pair.a) &&
+                       pair.samples.some(o=>o.src===pair.b);
+   const line=meshElement('line',{x1:p.x,y1:p.y,x2:q.x,y2:q.y,
+      stroke:meshSignalColor(rssi),'stroke-width':bidirectional?3:2.4,
+      'stroke-dasharray':bidirectional?'':'7 6',
+      'stroke-linecap':'round',opacity:'.87'},scene);
+   const nameA=known.get(pair.a).name||'ESP32 '+pair.a;
+   const nameB=known.get(pair.b).name||'ESP32 '+pair.b;
+   meshElement('title',{},line,nameA+' ↔ '+nameB+': '+rssi+
+     ' dBm, '+(bidirectional?'двусторонняя':'односторонняя')+
+     ' оценка, возраст '+Math.min(...pair.samples.map(o=>o.age))+' сек');
+   if(pairs.size<=16){
+     const label=meshElement('text',{x:(p.x+q.x)/2,
+       y:(p.y+q.y)/2-7,'text-anchor':'middle','font-size':11,
+       fill:'#d8e5f0','paint-order':'stroke',stroke:'#101f30',
+       'stroke-width':4},scene,rssi+' dBm');
+     label.style.pointerEvents='none';
+   }
+ }
+ addresses.forEach((address,i)=>{
+   const node=known.get(address),p=positions.get(address);
+   const isGateway=address===1;
+   const fill=isGateway?'#236e9a':node.online?'#23795d':'#536276';
+   const group=meshElement('g',{'class':'mesh-node',
+      'data-address':address,tabindex:0,role:'img',
+      'aria-label':(node.name||'ESP32 без имени')+
+       (node.online?' в сети':' нет связи')},scene);
+   const rect=meshElement('rect',{x:p.x-61,y:p.y-25,width:122,height:50,
+      rx:11,fill,stroke:isGateway?'#7cc8f2':'#7292a3',
+      'stroke-width':1.5},group);
+   rect.style.cursor='move';
+   const label=(node.name||'ESP32 без имени').slice(0,20);
+   meshElement('text',{x:p.x,y:p.y-3,
+     'text-anchor':'middle','font-size':12,'font-weight':600,
+     fill:'#fff','pointer-events':'none'},group,label);
+   meshElement('text',{x:p.x,y:p.y+13,'text-anchor':'middle',
+     'font-size':10,fill:'#e4edf5','pointer-events':'none'},group,
+     isGateway?'Шлюз · онлайн':(node.online?'В сети':'Нет связи')+
+     ' · 0x'+address.toString(16).padStart(4,'0'));
+   meshElement('title',{},group,(node.name||'ESP32 без имени')+
+     ' (0x'+address.toString(16)+') · '+
+     (node.firmware_version||'версия неизвестна'));
+ });
+ $('meshMapStatus').textContent=meshMapError ||
+   ('Устройств: '+addresses.length+' (включая шлюз), связей: '+pairs.size+
+    '. Измерения не старше 210 секунд. '+(pairs.size?
+    'Сплошная линия: наблюдение с двух сторон; пунктир: с одной.':
+    'Связи ещё не измерены — нужны новые прошивки узлов и несколько минут обмена.'));
+}
+let meshMapError='';
+async function refreshMeshData(force=false){
+ if(!token||meshMapBusy||activeMeshTab!=='map')return;
+ if(!force && Date.now()-meshMapLastFetch<15000)return;
+ meshMapBusy=true;
+ meshMapLastFetch=Date.now();
+ try{
+   const result=await api('/api/mesh/topology');
+   if(!token)return;
+   meshMapLinks=Array.isArray(result.links)?result.links:[];
+   meshMapError='';
+ }catch(err){
+   meshMapError='Ошибка загрузки топологии: '+err.message;
+ }finally{
+   meshMapBusy=false;
+   renderMeshMap();
+ }
+}
+function meshShowTab(which){
+ if(!token)return;
+ activeMeshTab=which;
+ $('devicesPanel').hidden=which!=='devices';
+ $('meshMapPanel').hidden=which!=='map';
+ $('showDevices').setAttribute('aria-selected',String(which==='devices'));
+ $('showMeshMap').setAttribute('aria-selected',String(which==='map'));
+ if(which==='map'){
+   renderMeshMap();
+   refreshMeshData(true);
+ }
+}
+$('showDevices').addEventListener('click',()=>meshShowTab('devices'));
+$('showMeshMap').addEventListener('click',()=>meshShowTab('map'));
+$('meshMapRefresh').addEventListener('click',()=>refreshMeshData(true));
+$('meshMapZoomIn').addEventListener('click',()=>meshMoveZoom(1.2));
+$('meshMapZoomOut').addEventListener('click',()=>meshMoveZoom(1/1.2));
+$('meshMapReset').addEventListener('click',()=>{
+ meshMapPan={x:0,y:0};meshMapScale=1;meshMapPositions.clear();
+ renderMeshMap();
+});
+meshSvg.addEventListener('wheel',event=>{
+ if(activeMeshTab!=='map')return;
+ event.preventDefault();
+ meshMoveZoom(event.deltaY<0?1.12:1/1.12,meshRawPoint(event));
+},{passive:false});
+meshSvg.addEventListener('pointerdown',event=>{
+ if(activeMeshTab!=='map')return;
+ const raw=meshRawPoint(event);
+ const vertex=event.target.closest('.mesh-node');
+ if(vertex){
+   const address=Number(vertex.getAttribute('data-address'));
+   const position=meshMapPositions.get(String(address));
+   if(!position)return;
+   const world=meshWorldPoint(raw);
+   meshMapDragging={pointerId:event.pointerId,address,
+     offsetX:world.x-position.x,offsetY:world.y-position.y};
+ }else{
+   meshMapDragging={pointerId:event.pointerId,address:null,
+     origin:raw,pan:{...meshMapPan}};
+ }
+ meshSvg.setPointerCapture(event.pointerId);
+});
+meshSvg.addEventListener('pointermove',event=>{
+ if(!meshMapDragging||event.pointerId!==meshMapDragging.pointerId)return;
+ const raw=meshRawPoint(event);
+ if(meshMapDragging.address!==null){
+   const world=meshWorldPoint(raw);
+   meshMapPositions.set(String(meshMapDragging.address),{
+     x:world.x-meshMapDragging.offsetX,
+     y:world.y-meshMapDragging.offsetY});
+ }else{
+   meshMapPan={
+     x:meshMapDragging.pan.x+raw.x-meshMapDragging.origin.x,
+     y:meshMapDragging.pan.y+raw.y-meshMapDragging.origin.y
+   };
+ }
+ renderMeshMap();
+});
+function finishMeshDrag(event){
+ if(!meshMapDragging||event.pointerId!==meshMapDragging.pointerId)return;
+ meshMapDragging=null;
+ if(meshSvg.hasPointerCapture(event.pointerId))
+   meshSvg.releasePointerCapture(event.pointerId);
+}
+meshSvg.addEventListener('pointerup',finishMeshDrag);
+meshSvg.addEventListener('pointercancel',finishMeshDrag);
+meshSvg.addEventListener('keydown',event=>{
+ const node=event.target.closest('.mesh-node');
+ if(!node)return;
+ const delta={ArrowUp:[0,-12],ArrowDown:[0,12],
+              ArrowLeft:[-12,0],ArrowRight:[12,0]}[event.key];
+ if(!delta)return;
+ event.preventDefault();
+ const key=node.getAttribute('data-address');
+ const p=meshMapPositions.get(key);
+ if(!p)return;
+ meshMapPositions.set(key,{x:p.x+delta[0],y:p.y+delta[1]});
+ renderMeshMap();
+});
 
 let meshSearchBusy=false;
 $('scanMesh').addEventListener('click',async()=>{

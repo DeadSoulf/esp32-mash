@@ -30,6 +30,7 @@
 #include "automesh_web.h"
 #include "automesh_locate.h"
 #include "automesh_ota_protocol.h"
+#include "automesh_topology.h"
 #include "automesh_gateway_node_ota.h"
 
 #define TAG "EXAMPLE"
@@ -146,6 +147,8 @@ static esp_ble_mesh_model_op_t locate_client_op[] = {
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_LOCATE_STATUS,3),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_FW_VERSION_STATUS,1),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_STATUS,7),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NEIGHBOR_BEACON,2),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NEIGHBOR_REPORT,1),
     ESP_BLE_MESH_MODEL_OP_END,
 };
 static esp_ble_mesh_model_t locate_models[] = {
@@ -717,6 +720,22 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
     }
 }
 
+/* TTL=1 direct beacon cannot be retransmitted through a Mesh relay. */
+static void automesh_gateway_direct_beacon(void)
+{
+    if(!locate_client.model)return;
+    esp_ble_mesh_msg_ctx_t ctx={0};
+    ctx.net_idx=prov_key.net_idx;
+    ctx.app_idx=prov_key.app_idx;
+    ctx.addr=ESP_BLE_MESH_ADDR_ALL_NODES;
+    ctx.send_ttl=1;
+    uint8_t data[2]={(uint8_t)locate_seq,(uint8_t)(locate_seq>>8)};
+    esp_err_t e=esp_ble_mesh_client_model_send_msg(
+        locate_client.model,&ctx,AUTOMESH_NEIGHBOR_BEACON,
+        sizeof(data),data,0,false,ROLE_PROVISIONER);
+    if(e!=ESP_OK)ESP_LOGD(TAG,"Direct beacon skipped: %s",esp_err_to_name(e));
+}
+
 static esp_err_t automesh_gateway_request_version(uint16_t address)
 {
     if (!locate_client.model || !ESP_BLE_MESH_ADDR_IS_UNICAST(address) ||
@@ -756,6 +775,8 @@ static void automesh_health_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(10000));
             continue;
         }
+        if ((firmware_poll_cycle % 6u)==0u)
+            automesh_gateway_direct_beacon();
         for (int i=0; i<ARRAY_SIZE(nodes); ++i) {
             if (nodes[i].elem_num == 0 ||
                 !ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast)) continue;
@@ -843,6 +864,24 @@ esp_err_t automesh_gateway_locate(uint16_t address,uint8_t duration)
 static void automesh_locate_client_cb(esp_ble_mesh_model_cb_event_t event,
                                      esp_ble_mesh_model_cb_param_t *param)
 {
+    if(event==ESP_BLE_MESH_MODEL_OPERATION_EVT &&
+       param->model_operation.model==&locate_models[0] &&
+       param->model_operation.ctx && param->model_operation.msg &&
+       param->model_operation.opcode==AUTOMESH_NEIGHBOR_BEACON &&
+       param->model_operation.length==2) {
+        const esp_ble_mesh_msg_ctx_t *ctx=param->model_operation.ctx;
+        automesh_topology_note_direct(ctx->addr,ctx->recv_rssi);
+        return;
+    }
+    if(event==ESP_BLE_MESH_MODEL_OPERATION_EVT &&
+       param->model_operation.model==&locate_models[0] &&
+       param->model_operation.ctx && param->model_operation.msg &&
+       param->model_operation.opcode==AUTOMESH_NEIGHBOR_REPORT) {
+        automesh_topology_note_report(param->model_operation.ctx->addr,
+                                     param->model_operation.msg,
+                                     param->model_operation.length);
+        return;
+    }
     if(event==ESP_BLE_MESH_MODEL_OPERATION_EVT &&
        param->model_operation.model==&locate_models[0] &&
        param->model_operation.opcode==AUTOMESH_NODE_OTA_STATUS &&

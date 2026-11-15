@@ -1,4 +1,4 @@
-set(srcs "main.c" "automesh_bridge.c" "automesh_status_led.c" "automesh_web.c" "automesh_ota.c" "automesh_gateway_node_ota.c" "automesh_admin.c" "automesh_wifi_scan.c")
+set(srcs "main.c" "automesh_bridge.c" "automesh_topology.c" "automesh_status_led.c" "automesh_web.c" "automesh_ota.c" "automesh_gateway_node_ota.c" "automesh_admin.c" "automesh_wifi_scan.c")
 
 idf_component_register(SRCS "${srcs}"
                     INCLUDE_DIRS  "."

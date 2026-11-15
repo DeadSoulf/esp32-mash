@@ -94,6 +94,7 @@ static esp_ble_mesh_model_op_t locate_op[] = {
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_FINISH, 2),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_NODE_OTA_ABORT, 2),
     ESP_BLE_MESH_MODEL_OP(AUTOMESH_PEER_HELLO, 2),
+    ESP_BLE_MESH_MODEL_OP(AUTOMESH_NEIGHBOR_BEACON, 2),
     ESP_BLE_MESH_MODEL_OP_END,
 };
 static esp_ble_mesh_model_t locate_models[] = {
@@ -134,7 +135,9 @@ static esp_ble_mesh_comp_t composition = {
 #define MAX_MESH_PEERS 48
 typedef struct {
     uint16_t address;
-    int64_t seen_us;
+    int64_t seen_us;         // Existing multi-hop peer heartbeat
+    int64_t direct_seen_us;  // Only TTL=1 direct neighbor beacons
+    int8_t direct_rssi;
 } mesh_peer_t;
 static mesh_peer_t mesh_peers[MAX_MESH_PEERS];
 static portMUX_TYPE mesh_peers_guard=portMUX_INITIALIZER_UNLOCKED;
@@ -152,12 +155,86 @@ static void automesh_note_peer(uint16_t address)
         if (mesh_peers[i].seen_us<mesh_peers[oldest].seen_us) oldest=i;
     }
     if (slot<0) slot=oldest;
-    mesh_peers[slot]=(mesh_peer_t){.address=address,.seen_us=now};
+    if (mesh_peers[slot].address != address)
+        memset(&mesh_peers[slot], 0, sizeof(mesh_peers[slot]));
+    mesh_peers[slot].address=address;
+    mesh_peers[slot].seen_us=now;
     portEXIT_CRITICAL(&mesh_peers_guard);
     // The status light reflects contact with ANY trusted Mesh peer,
     // not only the gateway. Losing the gateway does not erase Mesh keys.
     automesh_led_mark_alive();
 }
+/* Only TTL=1 beacons are considered actual radio-neighbor observations.
+ * An ordinary Mesh message can arrive through a relay; recv_rssi alone
+ * does not prove direct contact for multi-hop traffic. */
+static void automesh_note_direct_peer(uint16_t address, int8_t rssi)
+{
+    if (!ESP_BLE_MESH_ADDR_IS_UNICAST(address) ||
+        (address == esp_ble_mesh_get_primary_element_address() ||
+         rssi >= 0 || rssi == -128)) return;
+    const int64_t now=esp_timer_get_time();
+    portENTER_CRITICAL(&mesh_peers_guard);
+    int slot=-1, oldest=0;
+    for (int i=0;i<MAX_MESH_PEERS;i++) {
+        if (mesh_peers[i].address == address) {slot=i;break;}
+        if (mesh_peers[i].address == 0 && slot<0) slot=i;
+        if (mesh_peers[i].seen_us < mesh_peers[oldest].seen_us)oldest=i;
+    }
+    if(slot<0)slot=oldest;
+    if (mesh_peers[slot].address!=address)
+        memset(&mesh_peers[slot],0,sizeof(mesh_peers[slot]));
+    mesh_peers[slot].address=address;
+    mesh_peers[slot].seen_us=now;
+    mesh_peers[slot].direct_seen_us=now;
+    mesh_peers[slot].direct_rssi=rssi;
+    portEXIT_CRITICAL(&mesh_peers_guard);
+    automesh_led_mark_alive();
+}
+
+/* One compact, AppKey-encrypted report per minute, max three strongest
+ * neighbors. No flash writes or saved history. All current links are
+ * observations, never a fixed parent or computed route. */
+static void automesh_report_direct_neighbors(void)
+{
+    uint16_t selected_addr[3]={0};
+    int8_t selected_rssi[3]={-128,-128,-128};
+    uint8_t count=0, data[10]={0};
+    const int64_t now=esp_timer_get_time();
+    portENTER_CRITICAL(&mesh_peers_guard);
+    for(int i=0;i<MAX_MESH_PEERS;i++) {
+        const mesh_peer_t *p=&mesh_peers[i];
+        if(!p->address || !p->direct_seen_us ||
+           now-p->direct_seen_us > 180000000LL)continue;
+        int insert=0;
+        while(insert<3 && selected_addr[insert] &&
+              selected_rssi[insert]>=p->direct_rssi)insert++;
+        if(insert>=3)continue;
+        for(int k=2;k>insert;k--) {
+            selected_addr[k]=selected_addr[k-1];
+            selected_rssi[k]=selected_rssi[k-1];
+        }
+        selected_addr[insert]=p->address;
+        selected_rssi[insert]=p->direct_rssi;
+    }
+    portEXIT_CRITICAL(&mesh_peers_guard);
+    for(int i=0;i<3 && selected_addr[i];i++) {
+        data[1+3*i]=(uint8_t)selected_addr[i];
+        data[2+3*i]=(uint8_t)(selected_addr[i]>>8);
+        data[3+3*i]=(uint8_t)selected_rssi[i];
+        count++;
+    }
+    data[0]=count;
+    esp_ble_mesh_msg_ctx_t ctx={0};
+    ctx.net_idx=ESP_BLE_MESH_KEY_PRIMARY;
+    ctx.app_idx=0x0000;
+    ctx.addr=0x0001; // Approved gateway; no new provisioner / NetKey changes.
+    ctx.send_ttl=5;
+    esp_err_t e=esp_ble_mesh_server_model_send_msg(
+        &locate_models[0],&ctx,AUTOMESH_NEIGHBOR_REPORT,
+        (uint16_t)(1+3*count),data);
+    if(e!=ESP_OK)ESP_LOGD(TAG,"Neighbor report unavailable: %s",esp_err_to_name(e));
+}
+
 static void automesh_peer_task(void *arg)
 {
     (void)arg;
@@ -176,6 +253,17 @@ static void automesh_peer_task(void *arg)
                 &locate_models[0],&ctx,AUTOMESH_PEER_HELLO,sizeof(payload),payload);
             if(err!=ESP_OK)
                 ESP_LOGD(TAG,"Peer hello skipped (model not yet bound): %s",esp_err_to_name(err));
+            // TTL=1 ensures each radio observation is one hop, not a relay.
+            // Use an independent probe so the existing mesh heartbeat is intact.
+            ctx.send_ttl=1;
+            err=esp_ble_mesh_server_model_send_msg(
+                &locate_models[0],&ctx,AUTOMESH_NEIGHBOR_BEACON,
+                sizeof(payload),payload);
+            if(err!=ESP_OK)
+                ESP_LOGD(TAG,"Direct beacon unavailable: %s",esp_err_to_name(err));
+            // Leave an interval for nearby nodes to hear the beacon.
+            vTaskDelay(pdMS_TO_TICKS(1800+(esp_random()%900)));
+            automesh_report_direct_neighbors();
             int64_t now=esp_timer_get_time();
             unsigned live=0;
             portENTER_CRITICAL(&mesh_peers_guard);
@@ -385,6 +473,12 @@ static void automesh_locate_cb(esp_ble_mesh_model_cb_event_t event,
         !param->model_operation.ctx) return;
 
     const esp_ble_mesh_msg_ctx_t *ctx = param->model_operation.ctx;
+    if (param->model_operation.opcode == AUTOMESH_NEIGHBOR_BEACON) {
+        if (param->model_operation.length == 2 &&
+            param->model_operation.msg && esp_ble_mesh_node_is_provisioned())
+            automesh_note_direct_peer(ctx->addr,ctx->recv_rssi);
+        return;
+    }
     if (param->model_operation.opcode == AUTOMESH_PEER_HELLO) {
         if (param->model_operation.length == 2 &&
             param->model_operation.msg && esp_ble_mesh_node_is_provisioned())

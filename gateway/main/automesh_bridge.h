@@ -19,6 +19,8 @@ void automesh_provisioning_closed(void);
 void automesh_note_reply(uint16_t mesh_address);
 void automesh_note_version(uint16_t mesh_address, const uint8_t *data, size_t length);
 bool automesh_node_ota_supported(uint16_t address, uint8_t chip);
+/* Only approved and natively registered devices may appear in topology. */
+bool automesh_mesh_address_approved(uint16_t address);
 esp_err_t automesh_approve_uuid(const char *uuid_hex);
 esp_err_t automesh_deny_uuid(const char *uuid_hex);
 /* Remove an approved node from the provisioner's SDK database and gateway

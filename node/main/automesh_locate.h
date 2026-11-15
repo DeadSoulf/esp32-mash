@@ -13,3 +13,8 @@
 #define AUTOMESH_FW_VERSION_STATUS ESP_BLE_MESH_MODEL_OP_3(0x35, AUTOMESH_VENDOR_CID)
 /* Peer activity is encrypted with the existing Mesh AppKey; no leader needed. */
 #define AUTOMESH_PEER_BEACON_INTERVAL_SEC 60
+/* Direct, unrelayed neighbor probe (TTL 1) and compact report to gateway.
+ * Report: count:1 + up to 3*(address LE:2, RSSI signed:1).
+ * Replies are unsolicited and AppKey-protected. */
+#define AUTOMESH_NEIGHBOR_BEACON ESP_BLE_MESH_MODEL_OP_3(0x3C, AUTOMESH_VENDOR_CID)
+#define AUTOMESH_NEIGHBOR_REPORT ESP_BLE_MESH_MODEL_OP_3(0x3D, AUTOMESH_VENDOR_CID)

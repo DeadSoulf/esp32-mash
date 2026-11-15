@@ -1,6 +1,7 @@
 #include "automesh_web.h"
 #include "automesh_wifi_scan.h"
 #include "automesh_bridge.h"
+#include "automesh_topology.h"
 #include "automesh_admin.h"
 #include "automesh_ota.h"
 #include "automesh_gateway_node_ota.h"
@@ -233,6 +234,26 @@ static esp_err_t list_handler(httpd_req_t *req)
     free(buf);
     return e;
 }
+/* Returns only current in-memory neighbor observations for registered nodes.
+ * No credentials, fixed routes, or historical telemetry are exposed. */
+static esp_err_t mesh_topology_handler(httpd_req_t *req)
+{
+    if(!authorize(req))return ESP_OK;
+    const size_t capacity=24576;
+    char *body=malloc(capacity);
+    if(!body)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,
+                                        "Insufficient memory for Mesh map");
+    int n=automesh_topology_json(body,capacity);
+    if(n<0) {
+        free(body);
+        return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   "Mesh topology snapshot unavailable");
+    }
+    esp_err_t result=json_reply(req,"200 OK",body);
+    free(body);
+    return result;
+}
+
 static esp_err_t locate_status_handler(httpd_req_t *req)
 {
     if(!authorize(req))return ESP_OK;
@@ -624,7 +645,7 @@ esp_err_t automesh_web_start(void)
     e=automesh_wifi_scan_init();
     if(e!=ESP_OK)return e;
     httpd_config_t hc=HTTPD_DEFAULT_CONFIG();
-    hc.max_uri_handlers=24;
+    hc.max_uri_handlers=28;
     hc.recv_wait_timeout=20;
     hc.send_wait_timeout=20;
     hc.stack_size=6144;
@@ -637,6 +658,7 @@ esp_err_t automesh_web_start(void)
     httpd_uri_t admin_change={.uri="/api/admin/change",.method=HTTP_POST,.handler=admin_change_handler};
     httpd_uri_t index={.uri="/",.method=HTTP_GET,.handler=index_handler};
     httpd_uri_t devices={.uri="/api/devices",.method=HTTP_GET,.handler=list_handler};
+    httpd_uri_t topology={.uri="/api/mesh/topology",.method=HTTP_GET,.handler=mesh_topology_handler};
     httpd_uri_t status={.uri="/api/status",.method=HTTP_GET,.handler=status_handler};
     httpd_uri_t approve={.uri="/api/approve",.method=HTTP_POST,.handler=action_handler};
     httpd_uri_t deny={.uri="/api/deny",.method=HTTP_POST,.handler=action_handler};
@@ -658,6 +680,7 @@ esp_err_t automesh_web_start(void)
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&admin_change);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&index);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&devices);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&topology);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&status);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&approve);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&deny);

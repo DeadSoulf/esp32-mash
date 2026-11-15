@@ -109,11 +109,16 @@ static esp_err_t send_await(uint32_t opcode, const uint8_t *payload,
             portEXIT_CRITICAL(&state_guard);
             return ESP_ERR_INVALID_STATE;
         }
+        portEXIT_CRITICAL(&state_guard);
+
+        // Drain the previous attempt BEFORE arming this one. Otherwise a
+        // late STATUS can disarm transfer.awaiting and drop the new ACK.
+        while (xSemaphoreTake(reply_event, 0) == pdTRUE) {}
+        portENTER_CRITICAL(&state_guard);
         transfer.expected_ack=expected_offset;
         transfer.awaiting=true;
         portEXIT_CRITICAL(&state_guard);
 
-        while (xSemaphoreTake(reply_event, 0) == pdTRUE) {}
         esp_ble_mesh_msg_ctx_t ctx={0};
         ctx.net_idx=mesh_net_idx;
         ctx.app_idx=mesh_app_idx;

@@ -524,6 +524,49 @@ static esp_err_t node_ota_chunk_handler(httpd_req_t *req)
     snprintf(out,sizeof(out),"{\"accepted\":true,\"offset\":%lu}",(unsigned long)next);
     return json_reply(req,"200 OK",out);
 }
+/* Batch several individually ACKed Mesh DATA messages per HTTP request.
+ * Maximum 4 OTA2 packets (896 bytes); no change to the node protocol.
+ * On a partial failure the caller aborts rather than replaying the batch.
+ */
+static esp_err_t node_ota_batch_handler(httpd_req_t *req)
+{
+    if(!authorize(req))return ESP_OK;
+    if(setup_mode || !valid_origin(req))
+        return httpd_resp_send_err(req,HTTPD_403_FORBIDDEN,"OTA forbidden");
+    const uint16_t step=automesh_gateway_node_ota_max_chunk();
+    if((step!=AUTOMESH_NODE_OTA_LEGACY_BLOCK &&
+        step!=AUTOMESH_NODE_OTA_BLOCK) ||
+        req->content_len<=0 || req->content_len>4*step)
+        return json_reply(req,"400 Bad Request","{\"error\":\"invalid_batch_size\"}");
+    char offset_text[20]={0};
+    if(httpd_req_get_hdr_value_str(req,"X-OTA-Offset",
+                                   offset_text,sizeof(offset_text))!=ESP_OK)
+        return json_reply(req,"400 Bad Request","{\"error\":\"missing_offset\"}");
+    char *end=NULL;
+    unsigned long offset=strtoul(offset_text,&end,10);
+    if(end==offset_text || *end!='\\0' || offset>AUTOMESH_NODE_OTA_MAX_IMAGE)
+        return json_reply(req,"400 Bad Request","{\"error\":\"invalid_offset\"}");
+    uint8_t data[4*AUTOMESH_NODE_OTA_BLOCK];
+    size_t got=0;
+    while(got<(size_t)req->content_len) {
+        int n=httpd_req_recv(req,(char *)data+got,req->content_len-got);
+        if(n<=0)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,
+                                            "Incomplete batch");
+        got+=(size_t)n;
+    }
+    uint32_t confirmed=(uint32_t)offset;
+    for(size_t pos=0;pos<got;) {
+        size_t len=got-pos<step?got-pos:step;
+        esp_err_t err=automesh_gateway_node_ota_chunk((uint32_t)offset+
+                                 (uint32_t)pos,data+pos,len,&confirmed);
+        if(err!=ESP_OK)return node_ota_error(req,err,"batch");
+        pos+=len;
+    }
+    char out[70];
+    snprintf(out,sizeof(out),"{\"accepted\":true,\"offset\":%lu}",
+             (unsigned long)confirmed);
+    return json_reply(req,"200 OK",out);
+}
 static esp_err_t node_ota_finish_handler(httpd_req_t *req)
 {
     if(!authorize(req))return ESP_OK;
@@ -672,6 +715,7 @@ esp_err_t automesh_web_start(void)
     httpd_uri_t host_ota={.uri="/api/ota/gateway",.method=HTTP_POST,.handler=host_ota_handler};
     httpd_uri_t node_start={.uri="/api/ota/node/start",.method=HTTP_POST,.handler=node_ota_start_handler};
     httpd_uri_t node_chunk={.uri="/api/ota/node/chunk",.method=HTTP_POST,.handler=node_ota_chunk_handler};
+    httpd_uri_t node_batch={.uri="/api/ota/node/batch",.method=HTTP_POST,.handler=node_ota_batch_handler};
     httpd_uri_t node_finish={.uri="/api/ota/node/finish",.method=HTTP_POST,.handler=node_ota_finish_handler};
     httpd_uri_t node_abort={.uri="/api/ota/node/abort",.method=HTTP_POST,.handler=node_ota_abort_handler};
     httpd_uri_t wifi={.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_setup_handler};
@@ -694,6 +738,7 @@ esp_err_t automesh_web_start(void)
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&host_ota);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_start);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_chunk);
+    httpd_register_uri_handler(server,&node_batch);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_finish);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_abort);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi);

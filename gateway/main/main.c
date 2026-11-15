@@ -861,9 +861,54 @@ esp_err_t automesh_gateway_locate(uint16_t address,uint8_t duration)
     }
     return err;
 }
+/* With need_rsp=false (OTA transport), Espressif's custom CLIENT
+ * delivers STATUS as RECV_PUBLISH_MSG, *not* MODEL_OPERATION. The old
+ * callback listened only for MODEL_OPERATION, dropping every OTA ACK.
+ * Accept both paths: unacknowledged status and registered op-pair replies.
+ */
 static void automesh_locate_client_cb(esp_ble_mesh_model_cb_event_t event,
                                      esp_ble_mesh_model_cb_param_t *param)
 {
+    if(event==ESP_BLE_MESH_CLIENT_MODEL_RECV_PUBLISH_MSG_EVT) {
+        const uint32_t opcode=param->client_recv_publish_msg.opcode;
+        esp_ble_mesh_model_t *model=param->client_recv_publish_msg.model;
+        const esp_ble_mesh_msg_ctx_t *ctx=param->client_recv_publish_msg.ctx;
+        const uint8_t *payload=param->client_recv_publish_msg.msg;
+        const size_t len=param->client_recv_publish_msg.length;
+        if(model!=&locate_models[0] || !ctx || !payload)return;
+        if(opcode==AUTOMESH_NODE_OTA_STATUS && len==7) {
+            // Do not flood the USB log on every OTA data chunk.
+            uint32_t confirmed=automesh_u32(payload+2);
+            if(payload[6]!=0 || confirmed==0 ||
+               (confirmed % (64u*1024u)) < AUTOMESH_NODE_OTA_BLOCK)
+                ESP_LOGI(TAG,"Mesh OTA STATUS from 0x%04x: id=%u offset=%lu code=%u",
+                    ctx->addr,(unsigned)automesh_u16(payload),
+                    (unsigned long)confirmed,(unsigned)payload[6]);
+            automesh_gateway_node_ota_on_status(ctx->addr,payload,len);
+        } else if(opcode==AUTOMESH_FW_VERSION_STATUS &&
+                  len>0 && len<32) {
+            automesh_note_version(ctx->addr,payload,len);
+        } else if(opcode==AUTOMESH_NEIGHBOR_BEACON && len==2) {
+            automesh_topology_note_direct(ctx->addr,ctx->recv_rssi);
+        } else if(opcode==AUTOMESH_NEIGHBOR_REPORT) {
+            automesh_topology_note_report(ctx->addr,payload,len);
+        } else if(opcode==AUTOMESH_LOCATE_STATUS && len==3) {
+            // An unpaired locate ACK must still update the visibility
+            // state for the correct request and source node.
+            const uint16_t request_id=automesh_u16(payload);
+            bool matched=false;
+            portENTER_CRITICAL(&locate_lock);
+            if(locate_session.address==ctx->addr &&
+               locate_session.request_id==request_id &&
+               locate_session.phase==LOC_SENT) {
+                locate_session.phase=LOC_CONFIRMED;
+                matched=true;
+            }
+            portEXIT_CRITICAL(&locate_lock);
+            if(matched)automesh_note_reply(ctx->addr);
+        }
+        return;
+    }
     if(event==ESP_BLE_MESH_MODEL_OPERATION_EVT &&
        param->model_operation.model==&locate_models[0] &&
        param->model_operation.ctx && param->model_operation.msg &&

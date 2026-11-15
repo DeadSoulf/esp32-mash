@@ -66,10 +66,19 @@ static void ack(esp_ble_mesh_model_t *model, const esp_ble_mesh_msg_ctx_t *ctx,
     automesh_put32(data + 2, offset);
     data[6] = status;
     esp_ble_mesh_msg_ctx_t reply = *ctx;
+    // Received contexts have send_ttl=0 by default. An ACK at TTL 0
+    // cannot reach the gateway through relay nodes. This must be explicit.
+    reply.send_ttl = 5;
     esp_err_t err = esp_ble_mesh_server_model_send_msg(
         model, &reply, AUTOMESH_NODE_OTA_STATUS, sizeof(data), data);
     if (err != ESP_OK)
-        ESP_LOGW(TAG, "Status reply failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "Status reply FAILED id=%u offset=%lu code=%u: %s",
+                 (unsigned)id,(unsigned long)offset,(unsigned)status,
+                 esp_err_to_name(err));
+    else if (status != 0 || offset == 0)
+        ESP_LOGI(TAG, "Status ACK sent id=%u offset=%lu code=%u ttl=%u",
+                 (unsigned)id,(unsigned long)offset,(unsigned)status,
+                 (unsigned)reply.send_ttl);
 }
 static void reboot_after_ota(void *arg)
 {

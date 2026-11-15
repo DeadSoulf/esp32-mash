@@ -369,7 +369,7 @@ async function update(){
    if(!n.address || n.state==='removing')continue;
    const v=n.firmware_version||'Версия неизвестна';
    const chip=v.includes(' C3 ')?'C3':v.includes(' S3 ')?'S3':'';
-   const supportsOta=v.includes(' OTA1 ')||v.includes(' OTA2 ');
+   const supportsOta=v.includes(' OTA1 ')||v.includes(' OTA2 ')||v.includes(' OTA3 ');
    const item=new Option('Узел: '+(n.name||'ESP32 без имени')+' · '+v+
       ((!n.online||!chip||!supportsOta)?' (нужен USB)':''),
       'node:'+n.address);
@@ -1242,7 +1242,7 @@ async function uploadNodeImage(option,bytes,digest){
    progress.textContent='Передаю по BLE Mesh: '+transport+
       (transport==='OTA3'?' (контроль каждых 4 блоков)':' (подтверждение каждого блока)')+
       ' · '+blockBytes+' байт/блок.';
-   // Coalesce four blocks per HTTP request; each Mesh block is still ACKed.
+   // Four-block HTTP batch; OTA3 checkpoints each group, OTA1/2 ACK each packet.
    // Never retry an ambiguous partially completed batch.
    const batchBytes=blockBytes*4;
    for(let offset=0;offset<bytes.length;offset+=batchBytes){

@@ -228,10 +228,11 @@ static esp_err_t stream_send(uint32_t offset,const uint8_t *bytes,size_t length)
     }
     id=transfer.id;
     addr=transfer.address;
+    // Consume the previous send completion before arming a new packet.
+    while(xSemaphoreTake(stream_event,0)==pdTRUE){}
     transfer.send_pending=true;
     transfer.send_result=ESP_FAIL;
     portEXIT_CRITICAL(&state_guard);
-    while(xSemaphoreTake(stream_event,0)==pdTRUE){}
     automesh_put16(packet,id);
     automesh_put32(packet+2,offset);
     memcpy(packet+6,bytes,length);

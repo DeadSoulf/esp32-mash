@@ -329,3 +329,15 @@ RSSI и качество сигнала (хорошее/среднее/слаб�
 ## v0.3.22-dev — пакетная HTTP-передача OTA
 
 Браузер передаёт до четырёх блоков через один HTTP-запрос `/api/ota/node/batch` вместо отдельного запроса на каждый блок. Шлюз последовательно отправляет каждый блок по BLE Mesh и ожидает подтверждение узла; совместимость OTA1/OTA2, SHA-256 и откат сохраняются. При ошибке пакет не повторяется вслепую: текущая сессия прерывается, чтобы не допустить рассинхронизации. Это снижает HTTP-накладные расходы, но не гарантирует ускорение самого BLE Mesh; нужна проверка на реальных устройствах.
+
+
+## v0.3.23-dev — experimental OTA3 over existing BLE Mesh
+
+- New OTA3 firmware **explicitly advertises** `OTA3` in the firmware-version response. The gateway selects OTA3 only for an approved online node that advertises it; OTA1/OTA2 remain unchanged.
+- Sender submits one 224-byte segmented access message at a time, waits for the ESP-BLE-MESH **send-complete** callback to avoid simultaneous segmented sends, then requests a **CHECKPOINT** after up to four packets (896 bytes). The receiver reports the first uncommitted byte. Lost data is retried from that offset, not blindly from the beginning.
+- The receiver writes to an inactive OTA partition using its existing FreeRTOS Flash worker and validates SHA-256, ESP image header, project, and rollback before activating. NVS and Mesh keys are not erased. The browser still streams batches; it must remain open.
+- This is an **AutoMesh vendor protocol**, inspired by the block-level acknowledgements in Bluetooth Mesh BLOB Transfer. It is **not Bluetooth SIG BLOB Transfer/DFU**. Full BLOB interoperability and ESP-NOW OTA are **not implemented**. They require security and multi-hop radio testing.
+- Flash on 4 MB boards has two 1.75 MiB app slots plus a 384 KiB storage partition. Staging a whole app on the gateway would overwrite a rollback slot or require repartitioning; background OTA independent of browser is therefore not enabled.
+- **Upgrade order**: first gateway via Wi-Fi or USB, then one test node via its existing OTA2 or USB; OTA3 is available only for *subsequent* updates of that node. Verify radio speed, packet loss, power failure, and Relay hops with real hardware before wider rollout. No throughput guarantee is made.
+
+Docs: https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32c3/api-reference/bluetooth/esp-ble-mesh.html and https://github.com/espressif/esp-now.

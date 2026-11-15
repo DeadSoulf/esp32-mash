@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoMesh Server</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:dark;background:#11151c;color:#ecf1f5}
+*{box-sizing:border-box}body{margin:0}main{max-width:1000px;margin:auto;padding:22px}
+h1{font-size:1.55rem;margin:0}h2{font-size:1.1rem;margin:0 0 12px}
+p{line-height:1.5}.sub{color:#a4b2c4;font-size:.87rem}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;gap:16px;flex-wrap:wrap}
+section{border:1px solid #344050;background:#1c2430;border-radius:14px;padding:18px;margin:14px 0}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input,select,button{border-radius:9px;border:1px solid #536378;background:#121a23;color:#fff;padding:10px 12px;font:inherit}
+input{min-width:200px;flex:1}button{background:#2a557d;border-color:#477baa;cursor:pointer}
+button.secondary{background:#25313e}button.danger{background:#653a39;border-color:#a16662}
+button:disabled{opacity:.5;cursor:not-allowed}.hidden{display:none}
+.ok{color:#90e6ac}.warn{color:#ffcf87}.bad{color:#ff9999}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.device{padding:14px 0;border-top:1px solid #344050}
+.device:first-child{border-top:none}.device strong{font-size:.98rem}
+.device .buttons{display:flex;gap:8px;margin-top:8px}
+small{color:#a4b2c4}#feedback{min-height:1.4em}
+</style></head>
+<body><main>
+<header><div><h1>AutoMesh Server</h1><div class="sub">Windows / Linux · ESP32 через USB</div></div>
+<span id="online" class="warn">Нет подключения</span></header>
+<section id="login"><h2>Вход администратора</h2>
+<p class="sub">Введите токен, выведенный при запуске AutoMesh Server или установленный в AUTOMESH_SERVER_TOKEN.</p>
+<div class="controls"><input type="password" id="token" placeholder="Токен администратора" autocomplete="current-password">
+<button id="signin">Войти</button></div><p id="loginError" role="status" class="bad"></p></section>
+<div id="workspace" class="hidden">
+<section><h2>USB-контроллер</h2>
+<div class="controls"><select id="port"></select><button class="secondary" id="scan">Обновить порты</button><button id="connect">Подключить ESP32</button></div>
+<p id="info" class="sub">Выберите USB-порт контроллера.</p>
+<div class="controls"><button id="usbOn">Включить USB Mesh</button><button class="secondary" id="usbOff">Вернуть Wi-Fi-режим</button><button class="secondary" id="refresh">Обновить устройства</button></div>
+<p class="sub">USB Mesh отключает встроенную Wi-Fi-панель до команды возврата. Mesh-ключи в NVS не стираются.</p></section>
+<section><div class="row"><h2>Устройства Mesh</h2><small id="count">0 устройств</small></div>
+<div id="devices"><p class="sub">Подключите контроллер.</p></div></section>
+<p id="feedback" class="sub" role="status" aria-live="polite"></p>
+</div></main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+let key=sessionStorage.getItem('automesh_server_key')||'';
+let updating=false;
+function feedback(message,error=false){$('feedback').textContent=message;$('feedback').className=error?'bad':'sub';}
+async function api(url,method='GET',body){
+ const options={method,headers:{'X-AutoMesh-Admin':key},cache:'no-store'};
+ if(body!==undefined){options.headers['Content-Type']='application/json';options.body=JSON.stringify(body);}
+ const result=await fetch(url,options);
+ if(result.status===401){sessionStorage.removeItem('automesh_server_key');key='';$('login').classList.remove('hidden');$('workspace').classList.add('hidden');throw Error('Нужен вход администратора');}
+ if(!result.ok){let reason='HTTP '+result.status;try{const d=await result.json();reason=d.error||reason;}catch{}throw Error(reason);}
+ if(result.status===202||result.status===204)return {};
+ return result.json();
+}
+async function signin(){
+ key=$('token').value.trim();
+ try{await api('/api/auth');sessionStorage.setItem('automesh_server_key',key);$('login').classList.add('hidden');$('workspace').classList.remove('hidden');$('loginError').textContent='';await getPorts();await updateAll();}
+ catch(e){$('loginError').textContent=e.message;}
+}
+$('signin').addEventListener('click',signin);
+$('token').addEventListener('keydown',e=>{if(e.key==='Enter')signin();});
+async function getPorts(){
+ const data=await api('/api/ports'),current=$('port').value;
+ $('port').replaceChildren();
+ for(const port of data)$('port').add(new Option(port,port));
+ if(data.includes(current))$('port').value=current;
+}
+function deviceCard(d){
+ const block=document.createElement('div');block.className='device';
+ const top=document.createElement('div');top.className='row';
+ const title=document.createElement('strong');title.textContent=d.name||d.uuid;
+ const state=document.createElement('span');state.className=d.online?'ok':d.state==='pending'?'warn':'sub';
+ state.textContent=d.online?'В сети':({pending:'Ожидает разрешения',provisioning:'Сопряжение',offline:'Нет связи',needs_repair:'Нужна настройка',denied:'Отклонён'})[d.state]||d.state;
+ top.append(title,state);block.append(top);
+ const info=document.createElement('small');
+ info.textContent='Адрес: '+(d.address||'—')+' · '+(d.firmwareVersion||'Версия неизвестна')+' · '+d.uuid;
+ block.append(info);
+ if(d.state==='pending'){
+  const buttons=document.createElement('div');buttons.className='buttons';
+  const approve=document.createElement('button');approve.textContent='Разрешить';
+  approve.addEventListener('click',()=>run(async()=>{
+   if(!confirm('Добавить именно этот узел? Проверьте UUID: '+d.uuid))return;
+   await api('/api/devices/'+d.uuid+'/approve','POST');feedback('Запрос сопряжения отправлен');
+  }));
+  const deny=document.createElement('button');deny.textContent='Отклонить';deny.className='danger';
+  deny.addEventListener('click',()=>run(async()=>{
+   if(!confirm('Отклонить узел '+d.uuid+'?'))return;
+   await api('/api/devices/'+d.uuid+'/deny','POST');feedback('Узел отклонён');
+  }));
+  buttons.append(approve,deny);block.append(buttons);
+ }
+ return block;
+}
+async function updateAll(){
+ if(!key||updating)return;
+ updating=true;
+ try{
+  const s=await api('/api/status');
+  $('online').textContent=s.connected?'ESP32 подключена':'USB отключён';
+  $('online').className=s.connected?'ok':'warn';
+  $('info').textContent='Порт: '+(s.connectedPort||s.desiredPort||'не выбран')+
+     ' · Прошивка: '+(s.firmwareVersion||'не определена')+
+     ' · USB Mesh: '+(s.usbMode?'включён':'выключен')+
+     ' · Mesh: '+(s.meshReady?'работает':'не запущен')+
+     (s.lastError?' · Ошибка: '+s.lastError:'');
+  const devices=await api('/api/devices');$('count').textContent=devices.length+' устройств';
+  $('devices').replaceChildren();
+  if(!devices.length){const p=document.createElement('p');p.className='sub';p.textContent='Устройств пока нет. Проверьте USB Mesh и обновите список.';$('devices').append(p);}
+  else for(const d of devices)$('devices').append(deviceCard(d));
+ }catch(e){feedback(e.message,true);}
+ finally{updating=false;}
+}
+async function run(task){try{await task();}catch(e){feedback(e.message,true);}}
+$('scan').addEventListener('click',()=>run(getPorts));
+$('connect').addEventListener('click',()=>run(async()=>{const p=$('port').value;await api('/api/port','POST',{port:p});feedback('Подключение к '+p+' запрошено');}));
+$('usbOn').addEventListener('click',()=>run(async()=>{if(!confirm('Включить USB Mesh? Встроенная Wi-Fi-панель отключится до обратного переключения через USB.'))return;await api('/api/usb-mode','POST',{enabled:true});feedback('ESP32 переключается в USB Mesh и перезапускается');}));
+$('usbOff').addEventListener('click',()=>run(async()=>{if(!confirm('Вернуть ESP32 в режим Wi-Fi шлюза?'))return;await api('/api/usb-mode','POST',{enabled:false});feedback('ESP32 возвращается в Wi-Fi режим');}));
+$('refresh').addEventListener('click',()=>run(async()=>{await api('/api/refresh','POST');feedback('Список запрошен у ESP32');}));
+if(key){$('token').value=key;signin();}
+setInterval(updateAll,3000);
+</script></body></html>

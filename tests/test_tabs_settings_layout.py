@@ -50,9 +50,17 @@ class TabLayoutTests(unittest.TestCase):
                 self.assertEqual(self.doc.ids[tab]["attrs"]["aria-controls"], panel)
                 self.assertEqual(self.doc.ids[panel]["attrs"]["role"], "tabpanel")
 
-    def test_map_tab_contains_only_svg(self):
+    def test_map_tab_contains_only_svg_and_context_menu(self):
         children = self.doc.children["meshMapPanel"]
-        self.assertEqual(children, [("svg", "meshSvg"), ("g", "meshScene")])
+        # Only the SVG map and its transient device popup; no static
+        # forms, extra panels or management sections in the map tab.
+        ids = [ident for _,ident in children]
+        self.assertIn("meshSvg", ids)
+        self.assertIn("meshScene", ids)
+        self.assertIn("meshNodeMenu", ids)
+        self.assertIn("meshMenuLocate", ids)
+        self.assertIn("hidden", self.doc.ids["meshNodeMenu"]["attrs"])
+        self.assertFalse(any(tag in ("form", "h2", "section") for tag,_ in children))
         self.assertNotIn("Радиосвязь и индикация", HTML)
         for old in ("meshMapRefresh", "meshMapZoomIn", "meshMapZoomOut",
                     "meshMapReset", "meshMapStatus"):

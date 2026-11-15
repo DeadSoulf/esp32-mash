@@ -52,9 +52,17 @@ small{color:#9eb4c8}
 [hidden]{display:none!important}
 .mesh-tabs{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0}
 .mesh-tabs button[aria-selected="true"]{outline:2px solid #58a6e8;background:#174366}
-.mesh-map-shell{padding:0;overflow:hidden}
+.mesh-map-shell{position:relative;padding:0;overflow:hidden}
 #meshSvg{display:block;width:100%;height:70vh;min-height:430px;max-height:750px;background:#101f30;touch-action:none;cursor:grab}
 #meshSvg:active{cursor:grabbing}
+.mesh-popup{position:absolute;z-index:6;width:min(300px,calc(100% - 16px));max-height:calc(100% - 16px);overflow:auto;padding:15px;border-radius:12px;border:1px solid #547d9e;background:#1a3044;box-shadow:0 9px 32px #0009}
+.mesh-popup-head{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.mesh-popup-head strong{overflow-wrap:anywhere}
+.mesh-popup .sub{margin:8px 0;line-height:1.5}
+.mesh-popup .peer-item{font-size:12px;border-top:1px solid #35506a;padding:7px 0}
+.mesh-popup .operations{margin-top:12px}
+.mesh-popup button{font-size:13px}
+.mesh-popup button:focus-visible{outline:2px solid #89d5f6}
 </style>
 </head>
 <body>
@@ -127,6 +135,16 @@ small{color:#9eb4c8}
 <section class="panel mesh-map-shell" id="meshMapPanel" role="tabpanel" aria-labelledby="showMeshMap" hidden>
 <svg id="meshSvg" viewBox="0 0 900 430" role="img" aria-label="Карта Bluetooth Mesh: перетаскивайте узлы, колёсико — масштаб, двойной щелчок — сброс.">
 <g id="meshScene"></g></svg>
+<div id="meshNodeMenu" class="mesh-popup" role="dialog" aria-label="Устройство Mesh" hidden>
+<div class="mesh-popup-head"><strong id="meshMenuTitle">Устройство</strong>
+<button type="button" id="meshMenuClose" class="secondary" aria-label="Закрыть меню">✕</button></div>
+<p class="sub" id="meshMenuInfo"></p>
+<div id="meshMenuNeighbors"></div>
+<div id="meshMenuActions" class="operations">
+<button type="button" id="meshMenuLocate">Найти устройство</button>
+</div>
+<p id="meshMenuFeedback" class="msg" role="status"></p>
+</div>
 </section>
 <div id="settingsTab" role="tabpanel" aria-labelledby="showSettings" hidden>
 <section id="wifiSetup" class="panel">
@@ -180,6 +198,9 @@ let meshMapPositions=new Map();
 let meshMapScale=1;
 let meshMapPan={x:0,y:0};
 let meshMapDragging=null;
+let meshMapDiagnostics={};
+let meshMapSelectedAddress=null;
+let meshMapLocateBusy=false;
 const $=id=>document.getElementById(id);
 $('secret').value=token;
 function message(s){
@@ -200,12 +221,15 @@ function hideMainTabs(){
  $('devicesTab').hidden=true;
  $('meshMapPanel').hidden=true;
  $('settingsTab').hidden=true;
+ $('meshNodeMenu').hidden=true;
+ meshMapSelectedAddress=null;
 }
 function applyMeshTabs(){
  if($('meshTabs').hidden)return;
  $('devicesTab').hidden=activeMeshTab!=='devices';
  $('meshMapPanel').hidden=activeMeshTab!=='map';
  $('settingsTab').hidden=activeMeshTab!=='settings';
+ if(activeMeshTab!=='map')$('meshNodeMenu').hidden=true;
  for(const [id,tab] of [['showDevices','devices'],
                         ['showMeshMap','map'],
                         ['showSettings','settings']]){
@@ -506,13 +530,159 @@ function meshPosition(address,index,total){
 function meshSignalColor(dbm){
  return dbm>=-70?'#42aa87':dbm>=-85?'#d3a044':'#d87575';
 }
+// Context menu is deliberately the only overlay on the map. Future actions
+// are added to meshMenuActions rather than permanent panels on the canvas.
+function closeMeshNodeMenu(){
+ meshMapSelectedAddress=null;
+ $('meshNodeMenu').hidden=true;
+}
+function mapNode(address){
+ if(address===1)return {address:1,name:'Шлюз',online:true,
+   state:'online',mesh_configured:true};
+ return meshMapDevices.find(n=>Number(n.address)===address &&
+   ['online','offline','needs_repair'].includes(n.state));
+}
+function meshRssiText(rssi){
+ if(rssi===null||rssi===undefined)return 'RSSI не измерен';
+ return rssi+' dBm ('+(rssi>=-70?'хорошая':rssi>=-85?'средняя':'слабая')+' связь)';
+}
+function refreshMeshNodeMenu(){
+ const address=meshMapSelectedAddress;
+ if(address===null)return;
+ const node=mapNode(address);
+ if(!node){closeMeshNodeMenu();return;}
+ const gateway=address===1;
+ $('meshMenuTitle').textContent=node.name||'ESP32 без имени';
+ const version=node.firmware_version||'неизвестна';
+ const state=gateway?'Шлюз · в сети':uiState(node.state);
+ $('meshMenuInfo').textContent='Состояние: '+state+
+   ' · Адрес: 0x'+address.toString(16).padStart(4,'0')+
+   (gateway?'':' · Прошивка: '+version);
+ const container=$('meshMenuNeighbors');
+ container.replaceChildren();
+ // Each edge is an observed TTL=1 link, never an inferred parent route.
+ const directed=meshMapLinks.filter(link=>
+   Number(link.source)===address||Number(link.target)===address);
+ const contacts=new Map();
+ for(const link of directed){
+   const a=Number(link.source),b=Number(link.target);
+   const peer=a===address?b:a;
+   const known=mapNode(peer);
+   if(!known||a===b)continue;
+   const dbm=link.rssi===null||link.rssi===undefined?
+     null:Number(link.rssi);
+   if(dbm!==null && (!Number.isFinite(dbm)||dbm>=0||dbm<-127))
+     continue;
+   const previous=contacts.get(peer)||[];
+   previous.push({source:a,rssi:dbm,age:Number(link.age)||0});
+   contacts.set(peer,previous);
+ }
+ if(!contacts.size){
+   const hint=document.createElement('p');
+   hint.className='sub';
+   const counts=meshMapDiagnostics;
+   hint.textContent='Прямые радиососеди пока не обнаружены. '+
+     (Number(counts.direct_beacons||0)+Number(counts.neighbor_reports||0)===0?
+     'Шлюз ещё не получил маяков/отчётов. Проверьте прошивки узлов (нужна поддержка карты) и подождите до 3 минут.':
+     'Получены данные о сети, но прямой контакт этого узла пока не подтверждён.');
+   container.append(hint);
+ }else{
+   const title=document.createElement('p');
+   title.className='sub';
+   title.textContent='Прямые радиососеди ('+contacts.size+'):';
+   container.append(title);
+   for(const [peer,observations] of [...contacts.entries()].sort((a,b)=>a[0]-b[0])){
+     const known=mapNode(peer);
+     const valid=observations.map(x=>x.rssi).filter(x=>x!==null);
+     const measured=valid.length?Math.min(...valid):null;
+     const bidirectional=observations.some(x=>x.source===address) &&
+                         observations.some(x=>x.source===peer);
+     const line=document.createElement('div');
+     line.className='peer-item';
+     line.textContent=(known?.name||'Узел '+peer)+' · '+
+       meshRssiText(measured)+' · '+
+       (bidirectional?'двусторонняя':'односторонняя')+' связь · '+
+       'возраст '+Math.min(...observations.map(x=>x.age))+' с';
+     container.append(line);
+   }
+ }
+ const button=$('meshMenuLocate');
+ button.hidden=gateway;
+ button.disabled=gateway||!node.mesh_configured||meshMapLocateBusy;
+ button.title=node.mesh_configured?'Мигает светодиодом узла 15 секунд':
+   'Узел не настроен в Mesh';
+}
+function openMeshNodeMenu(address,clientX,clientY){
+ if(!token||activeMeshTab!=='map'||!mapNode(address))return;
+ meshMapSelectedAddress=address;
+ $('meshMenuFeedback').textContent='';
+ $('meshNodeMenu').hidden=false;
+ refreshMeshNodeMenu();
+ const bounds=$('meshMapPanel').getBoundingClientRect();
+ const menu=$('meshNodeMenu');
+ const left=Math.max(8,Math.min(clientX-bounds.left+14,
+                               Math.max(8,bounds.width-menu.offsetWidth-8)));
+ const top=Math.max(8,Math.min(clientY-bounds.top+12,
+                              Math.max(8,bounds.height-menu.offsetHeight-8)));
+ menu.style.left=left+'px';
+ menu.style.top=top+'px';
+}
+$('meshMenuClose').addEventListener('click',closeMeshNodeMenu);
+$('meshMenuLocate').addEventListener('click',async()=>{
+ const address=meshMapSelectedAddress;
+ if(address===null||address===1||meshMapLocateBusy)return;
+ const node=mapNode(address);
+ if(!node||!node.mesh_configured)return;
+ meshMapLocateBusy=true;
+ $('meshMenuLocate').disabled=true;
+ const feedback=(str)=>{
+   if(meshMapSelectedAddress===address)
+     $('meshMenuFeedback').textContent=str;
+ };
+ feedback('Отправляю команду поиска...');
+ try{
+   await api('/api/locate','POST',{address,seconds:15});
+   feedback('Ожидаю подтверждения...');
+   for(let attempt=0;attempt<20;attempt++){
+     await new Promise(resolve=>setTimeout(resolve,800));
+     const result=await api('/api/locate/status');
+     if(result.address!==address)continue;
+     if(result.status==='confirmed'){
+       feedback('Узел подтвердил команду. Светодиод должен мигать 15 секунд.');
+       return;
+     }
+     if(result.status==='failed'||result.status==='timeout'){
+       feedback('Нет подтверждения от узла. Проверьте связь и питание.');
+       return;
+     }
+   }
+   feedback('Время ожидания ответа узла истекло.');
+ }catch(error){
+   feedback('Поиск не выполнен: '+error.message);
+ }finally{
+   meshMapLocateBusy=false;
+   if(meshMapSelectedAddress===address)refreshMeshNodeMenu();
+ }
+});
+document.addEventListener('keydown',event=>{
+ if(event.key==='Escape'&&!$('meshNodeMenu').hidden)closeMeshNodeMenu();
+});
+document.addEventListener('pointerdown',event=>{
+ if(!$('meshNodeMenu').hidden &&
+    !$('meshNodeMenu').contains(event.target) &&
+    !meshSvg.contains(event.target))
+   closeMeshNodeMenu();
+});
 function renderMeshMap(){
  if(activeMeshTab!=='map'||!token)return;
  const known=new Map();
  known.set(1,{address:1,name:'Шлюз',state:'online',online:true});
  const registered=meshMapDevices.filter(n=>
    Number.isInteger(Number(n.address)) && Number(n.address)>1 &&
-   Number(n.address)<0x8000 && n.mesh_configured && n.state!=='removing');
+   Number(n.address)<0x8000 &&
+   ['online','offline','needs_repair'].includes(n.state));
+// Registered devices remain visible when temporarily offline or needing
+// Mesh repair. Only observed TTL=1 contacts get actual radio links.
  registered.sort((a,b)=>a.address-b.address);
  for(const n of registered)known.set(Number(n.address),n);
  const addresses=[...known.keys()];
@@ -525,9 +695,11 @@ function renderMeshMap(){
  const pairs=new Map();
  for(const link of meshMapLinks){
    const src=Number(link.source),dst=Number(link.target);
-   const rssi=Number(link.rssi);
+   // JSON null is an observed direct contact with no RSSI measurement.
+   const rssi=(link.rssi===null||link.rssi===undefined)?
+     null:Number(link.rssi);
    if(!known.has(src)||!known.has(dst)||src===dst||
-      !Number.isFinite(rssi) || rssi>=0 || rssi<-127)continue;
+      (rssi!==null && (!Number.isFinite(rssi)||rssi>=0||rssi<-127)))continue;
    const key=[Math.min(src,dst),Math.max(src,dst)].join(':');
    let pair=pairs.get(key);
    if(!pair){
@@ -543,23 +715,26 @@ function renderMeshMap(){
  for(const pair of pairs.values()){
    const p=positions.get(pair.a),q=positions.get(pair.b);
    if(!p||!q)continue;
-   const rssi=Math.min(...pair.samples.map(o=>o.rssi));
+   const measurements=pair.samples.map(o=>o.rssi).filter(v=>v!==null);
+   const rssi=measurements.length?Math.min(...measurements):null;
    const bidirectional=pair.samples.some(o=>o.src===pair.a) &&
                        pair.samples.some(o=>o.src===pair.b);
    const line=meshElement('line',{x1:p.x,y1:p.y,x2:q.x,y2:q.y,
-      stroke:meshSignalColor(rssi),'stroke-width':bidirectional?3:2.4,
+      stroke:rssi===null?'#91a1b2':meshSignalColor(rssi),
+      'stroke-width':bidirectional?3:2.4,
       'stroke-dasharray':bidirectional?'':'7 6',
       'stroke-linecap':'round',opacity:'.87'},scene);
    const nameA=known.get(pair.a).name||'ESP32 '+pair.a;
    const nameB=known.get(pair.b).name||'ESP32 '+pair.b;
-   meshElement('title',{},line,nameA+' ↔ '+nameB+': '+rssi+
-     ' dBm, '+(bidirectional?'двусторонняя':'односторонняя')+
-     ' оценка, возраст '+Math.min(...pair.samples.map(o=>o.age))+' сек');
+   meshElement('title',{},line,nameA+' ↔ '+nameB+': '+
+     (rssi===null?'RSSI неизвестен':rssi+' dBm')+', '+
+     (bidirectional?'двустороннее наблюдение':'одностороннее наблюдение')+
+     ', возраст '+Math.min(...pair.samples.map(o=>o.age))+' сек');
    if(pairs.size<=16){
      const label=meshElement('text',{x:(p.x+q.x)/2,
        y:(p.y+q.y)/2-7,'text-anchor':'middle','font-size':11,
        fill:'#d8e5f0','paint-order':'stroke',stroke:'#101f30',
-       'stroke-width':4},scene,rssi+' dBm');
+       'stroke-width':4},scene,rssi===null?'RSSI —':rssi+' dBm');
      label.style.pointerEvents='none';
    }
  }
@@ -568,7 +743,7 @@ function renderMeshMap(){
    const isGateway=address===1;
    const fill=isGateway?'#236e9a':node.online?'#23795d':'#536276';
    const group=meshElement('g',{'class':'mesh-node',
-      'data-address':address,tabindex:0,role:'img',
+      'data-address':address,tabindex:0,role:'button',
       'aria-label':(node.name||'ESP32 без имени')+
        (node.online?' в сети':' нет связи')},scene);
    const rect=meshElement('rect',{x:p.x-61,y:p.y-25,width:122,height:50,
@@ -592,7 +767,9 @@ function renderMeshMap(){
  meshSvg.setAttribute('aria-label',meshMapError ||
    ('Карта Bluetooth Mesh. Устройств: '+addresses.length+
     ', измеренных связей: '+pairs.size+
-    '. Перетаскивайте узлы, колёсико — масштаб, двойной щелчок — сброс.'));
+    '. Нажмите на узел для управления; перетаскивание перемещает его.'));
+ if(meshMapSelectedAddress!==null && !$('meshNodeMenu').hidden)
+   refreshMeshNodeMenu();
 }
 let meshMapError='';
 async function refreshMeshData(force=false){
@@ -604,6 +781,7 @@ async function refreshMeshData(force=false){
    const result=await api('/api/mesh/topology');
    if(!token)return;
    meshMapLinks=Array.isArray(result.links)?result.links:[];
+   meshMapDiagnostics=result.diagnostics||{};
    meshMapError='';
  }catch(err){
    meshMapError='Ошибка загрузки топологии: '+err.message;
@@ -620,7 +798,7 @@ function meshShowTab(which){
  if(which==='map'){
    renderMeshMap();
    refreshMeshData(true);
- }
+ }else closeMeshNodeMenu();
 }
 $('showDevices').addEventListener('click',()=>meshShowTab('devices'));
 $('showMeshMap').addEventListener('click',()=>meshShowTab('map'));
@@ -628,7 +806,7 @@ $('showSettings').addEventListener('click',()=>meshShowTab('settings'));
 // Keep the map clean: use the mouse wheel for zoom and double-click
 // to return to the initial layout, without extra buttons or panels.
 meshSvg.addEventListener('dblclick',event=>{
- if(activeMeshTab!=='map')return;
+ if(activeMeshTab!=='map'||event.target.closest('.mesh-node'))return;
  event.preventDefault();
  meshMapPan={x:0,y:0};meshMapScale=1;meshMapPositions.clear();
  renderMeshMap();
@@ -648,16 +826,23 @@ meshSvg.addEventListener('pointerdown',event=>{
    if(!position)return;
    const world=meshWorldPoint(raw);
    meshMapDragging={pointerId:event.pointerId,address,
-     offsetX:world.x-position.x,offsetY:world.y-position.y};
+     offsetX:world.x-position.x,offsetY:world.y-position.y,
+     origin:raw,moved:false};
  }else{
+   closeMeshNodeMenu();
    meshMapDragging={pointerId:event.pointerId,address:null,
-     origin:raw,pan:{...meshMapPan}};
+     origin:raw,pan:{...meshMapPan},moved:false};
  }
  meshSvg.setPointerCapture(event.pointerId);
 });
 meshSvg.addEventListener('pointermove',event=>{
  if(!meshMapDragging||event.pointerId!==meshMapDragging.pointerId)return;
  const raw=meshRawPoint(event);
+ const distance=Math.hypot(raw.x-meshMapDragging.origin.x,
+                           raw.y-meshMapDragging.origin.y);
+ if(distance<7&&!meshMapDragging.moved)return;
+ meshMapDragging.moved=true;
+ if(!$('meshNodeMenu').hidden)closeMeshNodeMenu();
  if(meshMapDragging.address!==null){
    const world=meshWorldPoint(raw);
    meshMapPositions.set(String(meshMapDragging.address),{
@@ -671,17 +856,28 @@ meshSvg.addEventListener('pointermove',event=>{
  }
  renderMeshMap();
 });
-function finishMeshDrag(event){
+function finishMeshDrag(event,cancelled=false){
  if(!meshMapDragging||event.pointerId!==meshMapDragging.pointerId)return;
+ const drag=meshMapDragging;
  meshMapDragging=null;
  if(meshSvg.hasPointerCapture(event.pointerId))
    meshSvg.releasePointerCapture(event.pointerId);
+ if(!cancelled&&!drag.moved&&drag.address!==null)
+   openMeshNodeMenu(drag.address,event.clientX,event.clientY);
 }
-meshSvg.addEventListener('pointerup',finishMeshDrag);
-meshSvg.addEventListener('pointercancel',finishMeshDrag);
+meshSvg.addEventListener('pointerup',event=>finishMeshDrag(event));
+meshSvg.addEventListener('pointercancel',event=>finishMeshDrag(event,true));
 meshSvg.addEventListener('keydown',event=>{
  const node=event.target.closest('.mesh-node');
  if(!node)return;
+ if(event.key==='Enter'||event.key===' '){
+   event.preventDefault();
+   const rect=node.getBoundingClientRect();
+   openMeshNodeMenu(Number(node.getAttribute('data-address')),
+                    rect.right,rect.top);
+   $('meshMenuClose').focus();
+   return;
+ }
  const delta={ArrowUp:[0,-12],ArrowDown:[0,12],
               ArrowLeft:[-12,0],ArrowRight:[12,0]}[event.key];
  if(!delta)return;

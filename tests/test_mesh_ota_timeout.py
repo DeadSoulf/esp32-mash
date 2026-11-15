@@ -65,10 +65,10 @@ class MeshOtaTimeoutRecoveryTests(unittest.TestCase):
         self.assertIn('id="changeAdminForm"',html)
 
     def test_release_version(self):
-        self.assertIn("AutoMesh-v0.3.19-dev.zip",
+        self.assertIn("AutoMesh-v0.3.20-dev.zip",
                       read(".github/workflows/esp-idf-c3.yml"))
         for role in ("gateway","node"):
-            self.assertIn('set(PROJECT_VER "0.3.19-dev")',
+            self.assertIn('set(PROJECT_VER "0.3.20-dev")',
                           read(role+"/CMakeLists.txt"))
 
 if __name__=="__main__":

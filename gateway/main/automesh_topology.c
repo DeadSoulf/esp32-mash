@@ -22,6 +22,13 @@ typedef struct {
 
 static topology_link_t links[AUTOMESH_TOPOLOGY_LINKS];
 static portMUX_TYPE links_guard=portMUX_INITIALIZER_UNLOCKED;
+static uint32_t direct_beacon_count, neighbor_report_count;
+static int64_t last_beacon_us, last_report_us;
+// RSSI 0 / -128 means measurement unavailable, not absence of a link.
+static int8_t reliable_rssi(int8_t rssi)
+{
+    return (rssi < 0 && rssi > -128) ? rssi : -128;
+}
 
 static void record_locked(uint16_t source, uint16_t target, int8_t rssi,
                           int64_t now)
@@ -42,11 +49,12 @@ static void record_locked(uint16_t source, uint16_t target, int8_t rssi,
 
 void automesh_topology_note_direct(uint16_t neighbor, int8_t rssi)
 {
-    if(!ESP_BLE_MESH_ADDR_IS_UNICAST(neighbor)||neighbor==0x0001||
-       rssi>=0 || rssi==-128)return;
+    if(!ESP_BLE_MESH_ADDR_IS_UNICAST(neighbor)||neighbor==0x0001)return;
     int64_t now=esp_timer_get_time();
     portENTER_CRITICAL(&links_guard);
-    record_locked(0x0001,neighbor,rssi,now);
+    record_locked(0x0001,neighbor,reliable_rssi(rssi),now);
+    direct_beacon_count++;
+    last_beacon_us=now;
     portEXIT_CRITICAL(&links_guard);
 }
 
@@ -60,6 +68,8 @@ void automesh_topology_note_report(uint16_t reporter,
     // Do not retain stale edges after it reports zero nearby devices.
     int64_t now=esp_timer_get_time();
     portENTER_CRITICAL(&links_guard);
+    neighbor_report_count++;
+    last_report_us=now;
     for(int i=0;i<AUTOMESH_TOPOLOGY_LINKS;i++)
         if(links[i].source==reporter)
             memset(&links[i],0,sizeof(links[i]));
@@ -69,8 +79,7 @@ void automesh_topology_note_report(uint16_t reporter,
         if(!ESP_BLE_MESH_ADDR_IS_UNICAST(neighbor)||neighbor==reporter)
             continue;
         int8_t rssi=(int8_t)data[3+3*j];
-        if(rssi>=0 || rssi==-128)continue;
-        record_locked(reporter,neighbor,rssi,now);
+        record_locked(reporter,neighbor,reliable_rssi(rssi),now);
     }
     portEXIT_CRITICAL(&links_guard);
 }
@@ -97,16 +106,35 @@ int automesh_topology_json(char *out, size_t cap)
            !automesh_mesh_address_approved(link.target))
             continue;
         long age=(long)((now-link.observed_at)/1000000LL);
+        // Unknown RSSI is JSON null, never a fabricated dBm figure.
+        char rssi_text[16];
+        if(link.rssi==-128)strcpy(rssi_text,"null");
+        else snprintf(rssi_text,sizeof(rssi_text),"%d",(int)link.rssi);
         int n=snprintf(out+offset,cap-(size_t)offset,
-                       "%s{\"source\":%u,\"target\":%u,\"rssi\":%d,\"age\":%ld}",
+                       "%s{\"source\":%u,\"target\":%u,\"rssi\":%s,\"age\":%ld}",
                        first?"":",",(unsigned)link.source,
-                       (unsigned)link.target,(int)link.rssi,age);
+                       (unsigned)link.target,rssi_text,age);
         if(n<0 || (size_t)n>=cap-(size_t)offset)return -1;
         offset+=n;
         first=false;
     }
+    uint32_t beacons,reports;
+    int64_t last_beacon,last_report;
+    portENTER_CRITICAL(&links_guard);
+    beacons=direct_beacon_count;
+    reports=neighbor_report_count;
+    last_beacon=last_beacon_us;
+    last_report=last_report_us;
+    portEXIT_CRITICAL(&links_guard);
+    long beacon_age=last_beacon>0 && now>=last_beacon?
+                    (long)((now-last_beacon)/1000000LL):-1;
+    long report_age=last_report>0 && now>=last_report?
+                    (long)((now-last_report)/1000000LL):-1;
     int n=snprintf(out+offset,cap-(size_t)offset,
-                   "],\"valid_for_seconds\":210}");
+        "],\"valid_for_seconds\":210,"
+        "\"diagnostics\":{\"direct_beacons\":%lu,\"neighbor_reports\":%lu,"
+        "\"last_beacon_age\":%ld,\"last_report_age\":%ld}}",
+        (unsigned long)beacons,(unsigned long)reports,beacon_age,report_age);
     if(n<0 || (size_t)n>=cap-(size_t)offset)return -1;
     return offset+n;
 }

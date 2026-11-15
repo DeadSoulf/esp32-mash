@@ -733,7 +733,7 @@ static void automesh_gateway_direct_beacon(void)
     esp_err_t e=esp_ble_mesh_client_model_send_msg(
         locate_client.model,&ctx,AUTOMESH_NEIGHBOR_BEACON,
         sizeof(data),data,0,false,ROLE_PROVISIONER);
-    if(e!=ESP_OK)ESP_LOGD(TAG,"Direct beacon skipped: %s",esp_err_to_name(e));
+    if(e!=ESP_OK)ESP_LOGW(TAG,"Direct Mesh beacon failed: %s",esp_err_to_name(e));
 }
 
 static esp_err_t automesh_gateway_request_version(uint16_t address)

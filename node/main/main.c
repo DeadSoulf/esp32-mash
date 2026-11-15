@@ -170,8 +170,10 @@ static void automesh_note_peer(uint16_t address)
 static void automesh_note_direct_peer(uint16_t address, int8_t rssi)
 {
     if (!ESP_BLE_MESH_ADDR_IS_UNICAST(address) ||
-        (address == esp_ble_mesh_get_primary_element_address() ||
-         rssi >= 0 || rssi == -128)) return;
+        address == esp_ble_mesh_get_primary_element_address()) return;
+    // A received, authenticated TTL=1 beacon is evidence of a direct
+    // radio neighbor even when the stack did not populate recv_rssi.
+    if(rssi >= 0 || rssi == -128)rssi=-128;
     const int64_t now=esp_timer_get_time();
     portENTER_CRITICAL(&mesh_peers_guard);
     int slot=-1, oldest=0;
@@ -232,7 +234,8 @@ static void automesh_report_direct_neighbors(void)
     esp_err_t e=esp_ble_mesh_server_model_send_msg(
         &locate_models[0],&ctx,AUTOMESH_NEIGHBOR_REPORT,
         (uint16_t)(1+3*count),data);
-    if(e!=ESP_OK)ESP_LOGD(TAG,"Neighbor report unavailable: %s",esp_err_to_name(e));
+    if(e!=ESP_OK)ESP_LOGW(TAG,"Mesh neighbor report failed: %s",esp_err_to_name(e));
+    else ESP_LOGI(TAG,"Direct neighbor report sent: %u observation(s)",(unsigned)count);
 }
 
 static void automesh_peer_task(void *arg)
@@ -260,7 +263,7 @@ static void automesh_peer_task(void *arg)
                 &locate_models[0],&ctx,AUTOMESH_NEIGHBOR_BEACON,
                 sizeof(payload),payload);
             if(err!=ESP_OK)
-                ESP_LOGD(TAG,"Direct beacon unavailable: %s",esp_err_to_name(err));
+                ESP_LOGW(TAG,"Direct neighbor beacon failed: %s",esp_err_to_name(err));
             // Leave an interval for nearby nodes to hear the beacon.
             vTaskDelay(pdMS_TO_TICKS(1800+(esp_random()%900)));
             automesh_report_direct_neighbors();

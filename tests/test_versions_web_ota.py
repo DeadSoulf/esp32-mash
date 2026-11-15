@@ -10,7 +10,7 @@ class FirmwareVersionsAndWebOta(unittest.TestCase):
     def test_project_versions_are_embedded(self):
         for role in ("gateway", "node"):
             with self.subTest(role=role):
-                self.assertIn('set(PROJECT_VER "0.3.21-dev")',
+                self.assertIn('set(PROJECT_VER "0.3.22-dev")',
                               read(role + "/CMakeLists.txt"))
 
     def test_gateway_reports_running_image_version_and_build_id(self):

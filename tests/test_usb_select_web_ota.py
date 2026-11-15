@@ -156,11 +156,18 @@ class WebGatewayOTATests(unittest.TestCase):
         self.assertIn("CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y",
                       (ROOT/"gateway/sdkconfig.defaults").read_text("utf-8"))
 
-    def test_web_only_accepts_gateway_app_binary(self):
-        self.assertIn('id="gatewayOtaForm"',HTML)
+    def test_unified_web_update_checks_gateway_binary_before_upload(self):
+        # The former gatewayOtaForm was replaced by a single OTA form.
+        # Chip and project are validated in the browser; the gateway's
+        # existing OTA implementation independently validates the image.
+        self.assertIn('id="otaForm"',HTML)
+        self.assertIn('id="otaTarget"',HTML)
+        self.assertIn('id="otaFirmware"',HTML)
         self.assertIn("new XMLHttpRequest()",HTML)
         self.assertIn("'/api/ota/gateway'",HTML)
-        self.assertIn("file.size>0x1C0000",HTML)
+        self.assertIn("function parseOtaImage(bytes)",HTML)
+        self.assertIn("image.project!==requiredProject",HTML)
+        self.assertIn("bytes.length>0x1c0000",HTML)
         self.assertIn("host_ota_ready",HTML)
 
 

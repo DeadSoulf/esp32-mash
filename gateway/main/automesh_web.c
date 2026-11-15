@@ -738,7 +738,7 @@ esp_err_t automesh_web_start(void)
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&host_ota);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_start);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_chunk);
-    httpd_register_uri_handler(server,&node_batch);
+    if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_batch);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_finish);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&node_abort);
     if(e==ESP_OK)e=httpd_register_uri_handler(server,&wifi);

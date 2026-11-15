@@ -76,23 +76,7 @@ small{color:#9eb4c8}
 <p id="message" class="msg" role="status"></p>
 </section>
 
-<section id="wifiSetup" class="panel" hidden>
-<h2>Настройки Wi-Fi шлюза</h2>
-<p id="wifiModeNote" class="sub">Поиск доступных сетей, выбор роутера и смена Wi-Fi подключения. Во время поиска связь Bluetooth Mesh может ненадолго замедлиться.</p>
-<div class="wifi-search">
-<button type="button" id="scanWifi" class="secondary">Сканировать Wi-Fi</button>
-<span class="sub" id="wifiScanStatus" role="status">Выберите поиск, чтобы увидеть сети рядом со шлюзом.</span>
-</div>
-<div id="wifiResults" class="wifi-results" aria-live="polite"></div>
-<form id="wifiForm">
-<div class="formfield"><label for="routerSsid">Название Wi-Fi сети (2,4 ГГц)</label>
-<input id="routerSsid" autocomplete="off" maxlength="32" required placeholder="SSID домашнего роутера"></div>
-<div class="formfield"><label for="routerPass">Пароль Wi-Fi сети</label>
-<input id="routerPass" type="password" autocomplete="off" minlength="8" maxlength="63" required></div>
-<button type="submit">Подключить шлюз к сети</button>
-</form>
-<p class="sub">После выбора другой Wi-Fi сети шлюз перезагрузится. Если подключение не удастся, прежние настройки автоматически восстановятся примерно через 45 секунд. Новый IP-адрес появится в USB-журнале.</p>
-</section>
+
 <div class="overview">
 <div class="metric"><span class="sub">Обнаружено</span><strong id="found">—</strong></div>
 <div class="metric"><span class="sub">В сети</span><strong id="live">—</strong></div>
@@ -129,6 +113,23 @@ small{color:#9eb4c8}
 <p class="sub">Wi-Fi шлюза: <strong id="ssid">—</strong>. Адрес страницы: <strong id="webAddress">192.168.4.1</strong>.</p>
 </section>
 <small>Локальная тестовая панель. Для удалённого доступа через интернет потребуется отдельный защищённый мост. Секреты регистрации и сети не отображаются в таблице.</small>
+<section id="wifiSetup" class="panel" hidden>
+<h2>Настройки Wi-Fi шлюза</h2>
+<p id="wifiModeNote" class="sub">Поиск доступных сетей, выбор роутера и смена Wi-Fi подключения. Во время поиска связь Bluetooth Mesh может ненадолго замедлиться.</p>
+<div class="wifi-search">
+<button type="button" id="scanWifi" class="secondary">Сканировать Wi-Fi</button>
+<span class="sub" id="wifiScanStatus" role="status">Выберите поиск, чтобы увидеть сети рядом со шлюзом.</span>
+</div>
+<div id="wifiResults" class="wifi-results" aria-live="polite"></div>
+<form id="wifiForm">
+<div class="formfield"><label for="routerSsid">Название Wi-Fi сети (2,4 ГГц)</label>
+<input id="routerSsid" autocomplete="off" maxlength="32" required placeholder="SSID домашнего роутера"></div>
+<div class="formfield"><label for="routerPass">Пароль Wi-Fi сети</label>
+<input id="routerPass" type="password" autocomplete="off" minlength="8" maxlength="63" required></div>
+<button type="submit">Подключить шлюз к сети</button>
+</form>
+<p class="sub">После выбора другой Wi-Fi сети шлюз перезагрузится. Если подключение не удастся, прежние настройки автоматически восстановятся примерно через 45 секунд. Новый IP-адрес появится в USB-журнале.</p>
+</section>
 <section id="adminChange" class="panel" hidden>
 <h2>Сменить ключ администратора</h2>
 <form id="changeAdminForm">
